@@ -188,4 +188,43 @@ router.get('/', async (req, res) => {
     }
 });
 
+// Delete user account
+router.delete('/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        
+        console.log(`🗑️ Deleting user: ${userId}`);
+        
+        // Найдем пользователя
+        const user = await User.findById(userId);
+        if (!user) {
+            console.log(`❌ User not found: ${userId}`);
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        console.log(`🗑️ Found user to delete: ${user.nickname}`);
+        
+        // TODO: Удалить связанные данные (чаты, сообщения)
+        // await Chat.deleteMany({ participants: userId });
+        // await Message.deleteMany({ senderId: userId });
+        
+        // Удаляем пользователя
+        await User.findByIdAndDelete(userId);
+        
+        console.log(`✅ User deleted: ${user.nickname}`);
+        
+        res.json({ 
+            message: 'User account deleted successfully',
+            deletedUser: {
+                id: userId,
+                nickname: user.nickname
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Delete user error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
 module.exports = router;
