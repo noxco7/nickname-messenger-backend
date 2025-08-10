@@ -4,7 +4,12 @@ const router = express.Router();
 
 router.post('/register', async (req, res) => {
     try {
-        const { nickname, publicKey, tronAddress } = req.body;
+        const { id, nickname, publicKey, tronAddress, firstName, lastName, avatar } = req.body;
+
+        console.log('🚀 Registration request received:');
+        console.log('   - ID:', id);
+        console.log('   - Nickname:', nickname);
+        console.log('   - TRON Address:', tronAddress);
 
         if (!nickname || !publicKey || !tronAddress) {
             return res.status(400).json({
@@ -12,8 +17,13 @@ router.post('/register', async (req, res) => {
             });
         }
 
+        // ИСПРАВЛЕНО: Проверяем существование пользователя
         const existingUser = await User.findOne({
-            $or: [{ nickname }, { publicKey }, { tronAddress }]
+            $or: [
+                { nickname }, 
+                { publicKey }, 
+                { tronAddress }
+            ]
         });
 
         if (existingUser) {
@@ -22,27 +32,45 @@ router.post('/register', async (req, res) => {
             else if (existingUser.publicKey === publicKey) field = 'publicKey';
             else field = 'tronAddress';
             
+            console.log(`❌ User already exists with ${field}:`, existingUser[field]);
             return res.status(409).json({
                 error: `User with this ${field} already exists`
             });
         }
 
-        const user = new User({ nickname, publicKey, tronAddress });
+        // ИСПРАВЛЕНО: Создаем пользователя с переданным ID или генерируем новый
+        const userData = {
+            _id: id || require('crypto').randomUUID(), // Используем переданный ID или генерируем UUID
+            nickname,
+            publicKey,
+            tronAddress,
+            firstName: firstName || '',
+            lastName: lastName || '',
+            avatar: avatar || null
+        };
+
+        const user = new User(userData);
         await user.save();
+
+        console.log('✅ User registered successfully:', user.nickname);
 
         res.status(201).json({
             message: 'User registered successfully',
             user: {
                 id: user._id,
+                _id: user._id, // Для совместимости
                 nickname: user.nickname,
                 publicKey: user.publicKey,
                 tronAddress: user.tronAddress,
+                firstName: user.firstName,
+                lastName: user.lastName,
+                avatar: user.avatar,
                 createdAt: user.createdAt
             }
         });
 
     } catch (error) {
-        console.error('Registration error:', error);
+        console.error('❌ Registration error:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
@@ -63,7 +91,7 @@ router.post('/check-nickname', async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Nickname check error:', error);
+        console.error('❌ Nickname check error:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 });

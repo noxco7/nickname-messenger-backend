@@ -1,6 +1,11 @@
 const mongoose = require('mongoose');
 
 const UserSchema = new mongoose.Schema({
+    // ИСПРАВЛЕНО: Убираем уникальность и валидацию для совместимости с UUID
+    _id: {
+        type: String, // Используем String вместо ObjectId для UUID
+        required: true
+    },
     nickname: {
         type: String,
         required: true,
@@ -43,8 +48,9 @@ const UserSchema = new mongoose.Schema({
         default: Date.now
     }
 }, {
-    timestamps: true, // Автоматически добавляет createdAt и updatedAt
-    collection: 'users' // Явно указываем имя коллекции
+    _id: false, // ВАЖНО: отключаем автогенерацию _id
+    timestamps: true,
+    collection: 'users'
 });
 
 // Виртуальное поле для отображаемого имени
@@ -53,6 +59,11 @@ UserSchema.virtual('displayName').get(function() {
         return `${this.firstName} ${this.lastName}`;
     }
     return this.nickname;
+});
+
+// ДОБАВЛЕНО: Виртуальное поле id для совместимости с клиентом
+UserSchema.virtual('id').get(function() {
+    return this._id;
 });
 
 // Включаем виртуальные поля в JSON
