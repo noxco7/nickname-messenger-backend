@@ -1,13 +1,14 @@
 const mongoose = require('mongoose');
 
-const userSchema = new mongoose.Schema({
+const UserSchema = new mongoose.Schema({
     nickname: {
         type: String,
         required: true,
         unique: true,
         trim: true,
         minlength: 3,
-        maxlength: 20
+        maxlength: 20,
+        match: /^[a-zA-Z0-9_]+$/
     },
     publicKey: {
         type: String,
@@ -30,7 +31,8 @@ const userSchema = new mongoose.Schema({
         maxlength: 50
     },
     avatar: {
-        type: String
+        type: String,
+        default: null
     },
     isOnline: {
         type: Boolean,
@@ -41,11 +43,26 @@ const userSchema = new mongoose.Schema({
         default: Date.now
     }
 }, {
-    timestamps: true
+    timestamps: true, // Автоматически добавляет createdAt и updatedAt
+    collection: 'users' // Явно указываем имя коллекции
 });
 
-userSchema.index({ nickname: 1 });
-userSchema.index({ tronAddress: 1 });
-userSchema.index({ publicKey: 1 });
+// Виртуальное поле для отображаемого имени
+UserSchema.virtual('displayName').get(function() {
+    if (this.firstName && this.lastName) {
+        return `${this.firstName} ${this.lastName}`;
+    }
+    return this.nickname;
+});
 
-module.exports = mongoose.model('User', userSchema);
+// Включаем виртуальные поля в JSON
+UserSchema.set('toJSON', { virtuals: true });
+UserSchema.set('toObject', { virtuals: true });
+
+// Индексы для быстрого поиска
+UserSchema.index({ nickname: 1 });
+UserSchema.index({ tronAddress: 1 });
+UserSchema.index({ publicKey: 1 });
+UserSchema.index({ firstName: 'text', lastName: 'text', nickname: 'text' });
+
+module.exports = mongoose.model('User', UserSchema);

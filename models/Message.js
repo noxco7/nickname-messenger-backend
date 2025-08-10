@@ -1,6 +1,6 @@
 const mongoose = require('mongoose');
 
-const messageSchema = new mongoose.Schema({
+const MessageSchema = new mongoose.Schema({
     chatId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Chat',
@@ -13,7 +13,8 @@ const messageSchema = new mongoose.Schema({
     },
     content: {
         type: String,
-        required: true
+        required: true,
+        maxlength: 2000
     },
     messageType: {
         type: String,
@@ -21,7 +22,8 @@ const messageSchema = new mongoose.Schema({
         default: 'text'
     },
     cryptoAmount: {
-        type: Number
+        type: Number,
+        min: 0
     },
     transactionHash: {
         type: String
@@ -32,13 +34,26 @@ const messageSchema = new mongoose.Schema({
     },
     isEncrypted: {
         type: Boolean,
-        default: true
-    }
+        default: false
+    },
+    readBy: [{
+        userId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User'
+        },
+        readAt: {
+            type: Date,
+            default: Date.now
+        }
+    }]
 }, {
-    timestamps: true
+    timestamps: true,
+    collection: 'messages'
 });
 
-messageSchema.index({ chatId: 1, createdAt: -1 });
-messageSchema.index({ senderId: 1 });
+// Индексы для быстрого поиска
+MessageSchema.index({ chatId: 1, createdAt: -1 });
+MessageSchema.index({ senderId: 1 });
+MessageSchema.index({ messageType: 1 });
 
-module.exports = mongoose.model('Message', messageSchema);
+module.exports = mongoose.model('Message', MessageSchema);
