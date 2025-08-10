@@ -87,7 +87,7 @@ router.get('/search', async (req, res) => {
         
         // Выполняем поиск
         const users = await User.find(searchCriteria)
-            .select('_id nickname firstName lastName avatar isOnline createdAt')
+            .select('_id nickname firstName lastName avatar isOnline createdAt publicKey tronAddress') // ДОБАВЛЕНЫ publicKey и tronAddress
             .sort({ createdAt: -1 }) // Сортируем по дате создания
             .limit(limit)
             .skip(skip);
@@ -111,6 +111,8 @@ router.get('/search', async (req, res) => {
                 lastName: user.lastName || '',
                 avatar: user.avatar || '',
                 isOnline: user.isOnline || false,
+                publicKey: user.publicKey || '', // ДОБАВЛЕНО
+                tronAddress: user.tronAddress || '', // ДОБАВЛЕНО
                 createdAt: user.createdAt,
                 // Добавляем displayName для совместимости с клиентом
                 displayName: user.firstName && user.lastName 
@@ -204,17 +206,30 @@ router.delete('/:userId', async (req, res) => {
         
         console.log(`🗑️ Found user to delete: ${user.nickname}`);
         
-        // TODO: Удалить связанные данные (чаты, сообщения)
-        // await Chat.deleteMany({ participants: userId });
-        // await Message.deleteMany({ senderId: userId });
+        // ИСПРАВЛЕНО: Удаляем связанные данные
+        try {
+            // Удаляем все чаты пользователя
+            const Chat = require('../models/Chat');
+            const deletedChats = await Chat.deleteMany({ participants: userId });
+            console.log(`🗑️ Deleted ${deletedChats.deletedCount} chats`);
+            
+            // Удаляем все сообщения пользователя
+            const Message = require('../models/Message');
+            const deletedMessages = await Message.deleteMany({ senderId: userId });
+            console.log(`🗑️ Deleted ${deletedMessages.deletedCount} messages`);
+            
+        } catch (error) {
+            console.log(`⚠️ Error deleting related data: ${error.message}`);
+            // Продолжаем удаление пользователя даже если не удалось удалить связанные данные
+        }
         
         // Удаляем пользователя
         await User.findByIdAndDelete(userId);
         
-        console.log(`✅ User deleted: ${user.nickname}`);
+        console.log(`✅ User and all related data deleted: ${user.nickname}`);
         
         res.json({ 
-            message: 'User account deleted successfully',
+            message: 'User account and all related data deleted successfully',
             deletedUser: {
                 id: userId,
                 nickname: user.nickname
