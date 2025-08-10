@@ -7,8 +7,7 @@ const MessageSchema = new mongoose.Schema({
         required: true
     },
     senderId: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'User',
+        type: String, // ИСПРАВЛЕНО: используем String для UUID
         required: true
     },
     content: {
@@ -38,8 +37,7 @@ const MessageSchema = new mongoose.Schema({
     },
     readBy: [{
         userId: {
-            type: mongoose.Schema.Types.ObjectId,
-            ref: 'User'
+            type: String // ИСПРАВЛЕНО: используем String для UUID
         },
         readAt: {
             type: Date,

@@ -111,9 +111,9 @@ router.get('/search', async (req, res) => {
                 lastName: user.lastName || '',
                 avatar: user.avatar || '',
                 isOnline: user.isOnline || false,
-                publicKey: user.publicKey || '', // ДОБАВЛЕНО
-                tronAddress: user.tronAddress || '', // ДОБАВЛЕНО
-                createdAt: user.createdAt,
+                publicKey: user.publicKey || '',
+                tronAddress: user.tronAddress || '',
+                createdAt: user.createdAt.toISOString(), // ИСПРАВЛЕНО: форматируем дату в ISO
                 // Добавляем displayName для совместимости с клиентом
                 displayName: user.firstName && user.lastName 
                     ? `${user.firstName} ${user.lastName}` 

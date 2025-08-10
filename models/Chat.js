@@ -2,8 +2,7 @@ const mongoose = require('mongoose');
 
 const ChatSchema = new mongoose.Schema({
     participants: [{
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'User',
+        type: String, // ИСПРАВЛЕНО: используем String вместо ObjectId для UUID
         required: true
     }],
     lastMessage: {
