@@ -1,8 +1,16 @@
+// =====================================================
+// ФАЙЛ: routes/users.js (BACKEND)
+// ПУТЬ: nickname-messenger-backend/routes/users.js  
+// ТИП: Node.js Backend
+// ОПИСАНИЕ: Защищенные пользователями роуты с JWT
+// =====================================================
+
 const express = require('express');
 const User = require('../models/User');
+const { authenticateToken, optionalAuth } = require('../middleware/auth');
 const router = express.Router();
 
-// Get user by nickname
+// Get user by nickname (БЕЗ аутентификации - публичная информация)
 router.get('/nickname/:nickname', async (req, res) => {
     try {
         const { nickname } = req.params;
@@ -25,7 +33,7 @@ router.get('/nickname/:nickname', async (req, res) => {
     }
 });
 
-// Get user by TRON address
+// Get user by TRON address (БЕЗ аутентификации - для восстановления аккаунта)
 router.get('/address/:address', async (req, res) => {
     try {
         const { address } = req.params;
@@ -48,15 +56,15 @@ router.get('/address/:address', async (req, res) => {
     }
 });
 
-// ИСПРАВЛЕНО: Search users - теперь использует query parameter
-router.get('/search', async (req, res) => {
+// Search users (С аутентификацией - чтобы исключить текущего пользователя)
+router.get('/search', authenticateToken, async (req, res) => {
     try {
-        const query = req.query.q; // Получаем query из параметра ?q=
+        const query = req.query.q;
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 20;
         const skip = (page - 1) * limit;
         
-        console.log(`🔍 Searching users with query: "${query}"`);
+        console.log(`🔍 Searching users with query: "${query}" by user: ${req.user.nickname}`);
         console.log(`📄 Page: ${page}, Limit: ${limit}, Skip: ${skip}`);
         
         if (!query || query.trim().length === 0) {
@@ -70,39 +78,40 @@ router.get('/search', async (req, res) => {
         }
         
         const trimmedQuery = query.trim();
-        
-        // Создаем регулярное выражение для поиска (регистронезависимый)
         const searchRegex = new RegExp(trimmedQuery, 'i');
         
-        // Поиск по nickname, firstName, lastName
+        // НОВОЕ: Исключаем текущего пользователя из результатов поиска
         const searchCriteria = {
-            $or: [
-                { nickname: searchRegex },
-                { firstName: searchRegex },
-                { lastName: searchRegex }
+            $and: [
+                {
+                    $or: [
+                        { nickname: searchRegex },
+                        { firstName: searchRegex },
+                        { lastName: searchRegex }
+                    ]
+                },
+                {
+                    _id: { $ne: req.user.id } // Исключаем текущего пользователя
+                }
             ]
         };
         
         console.log('🔎 Search criteria:', JSON.stringify(searchCriteria, null, 2));
         
-        // Выполняем поиск
         const users = await User.find(searchCriteria)
-            .select('_id nickname firstName lastName avatar isOnline createdAt publicKey tronAddress') // ДОБАВЛЕНЫ publicKey и tronAddress
-            .sort({ createdAt: -1 }) // Сортируем по дате создания
+            .select('_id nickname firstName lastName avatar isOnline createdAt publicKey tronAddress')
+            .sort({ createdAt: -1 })
             .limit(limit)
             .skip(skip);
         
-        // Подсчитываем общее количество
         const total = await User.countDocuments(searchCriteria);
         
-        console.log(`✅ Found ${users.length} users (total: ${total})`);
+        console.log(`✅ Found ${users.length} users (total: ${total}) excluding current user`);
         
-        // Логируем найденных пользователей
         users.forEach(user => {
             console.log(`   - ${user.nickname} (${user.firstName || 'No first name'} ${user.lastName || 'No last name'})`);
         });
         
-        // Возвращаем в формате, ожидаемом клиентом
         res.json({
             users: users.map(user => ({
                 id: user._id,
@@ -113,8 +122,7 @@ router.get('/search', async (req, res) => {
                 isOnline: user.isOnline || false,
                 publicKey: user.publicKey || '',
                 tronAddress: user.tronAddress || '',
-                createdAt: user.createdAt.toISOString(), // ИСПРАВЛЕНО: форматируем дату в ISO
-                // Добавляем displayName для совместимости с клиентом
+                createdAt: user.createdAt.toISOString(),
                 displayName: user.firstName && user.lastName 
                     ? `${user.firstName} ${user.lastName}` 
                     : user.nickname
@@ -136,36 +144,13 @@ router.get('/search', async (req, res) => {
     }
 });
 
-// DEPRECATED: Старый роут для поиска (оставляем для совместимости)
-router.get('/search/:query', async (req, res) => {
-    try {
-        const { query } = req.params;
-        const limit = parseInt(req.query.limit) || 20;
-        
-        console.log(`🔍 [DEPRECATED] Searching users with query: "${query}"`);
-        
-        const users = await User.find({
-            nickname: { $regex: query, $options: 'i' }
-        })
-        .select('nickname firstName lastName avatar isOnline')
-        .limit(limit);
-        
-        console.log(`✅ [DEPRECATED] Found ${users.length} users`);
-        res.json(users);
-        
-    } catch (error) {
-        console.error('Search users error:', error);
-        res.status(500).json({ error: 'Internal server error' });
-    }
-});
-
-// Get all users (для отладки - можно удалить в продакшене)
-router.get('/', async (req, res) => {
+// Get all users (ЗАЩИЩЕНО - только для админов или отладки)
+router.get('/', authenticateToken, async (req, res) => {
     try {
         const limit = parseInt(req.query.limit) || 50;
         const skip = parseInt(req.query.skip) || 0;
         
-        console.log(`👥 Getting all users (limit: ${limit}, skip: ${skip})`);
+        console.log(`👥 Getting all users (limit: ${limit}, skip: ${skip}) by user: ${req.user.nickname}`);
         
         const users = await User.find({})
             .select('nickname firstName lastName avatar isOnline createdAt')
@@ -190,12 +175,57 @@ router.get('/', async (req, res) => {
     }
 });
 
-// Delete user account
-router.delete('/:userId', async (req, res) => {
+// Update user profile (ЗАЩИЩЕНО - только свой профиль)
+router.put('/profile', authenticateToken, async (req, res) => {
     try {
-        const { userId } = req.params;
+        const { firstName, lastName, avatar } = req.body;
         
-        console.log(`🗑️ Deleting user: ${userId}`);
+        console.log(`✏️ Updating profile for user: ${req.user.nickname}`);
+        
+        const updateData = {};
+        if (firstName !== undefined) updateData.firstName = firstName;
+        if (lastName !== undefined) updateData.lastName = lastName;
+        if (avatar !== undefined) updateData.avatar = avatar;
+        
+        const updatedUser = await User.findByIdAndUpdate(
+            req.user.id,
+            updateData,
+            { new: true, runValidators: true }
+        );
+        
+        if (!updatedUser) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        console.log(`✅ Profile updated for user: ${updatedUser.nickname}`);
+        
+        res.json({
+            message: 'Profile updated successfully',
+            user: {
+                id: updatedUser._id,
+                nickname: updatedUser.nickname,
+                firstName: updatedUser.firstName,
+                lastName: updatedUser.lastName,
+                avatar: updatedUser.avatar,
+                publicKey: updatedUser.publicKey,
+                tronAddress: updatedUser.tronAddress,
+                isOnline: updatedUser.isOnline,
+                updatedAt: updatedUser.updatedAt
+            }
+        });
+        
+    } catch (error) {
+        console.error('Update profile error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// Delete user account (ЗАЩИЩЕНО - только свой аккаунт)
+router.delete('/account', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        
+        console.log(`🗑️ Deleting account for user: ${req.user.nickname}`);
         
         // Найдем пользователя
         const user = await User.findById(userId);
@@ -206,30 +236,27 @@ router.delete('/:userId', async (req, res) => {
         
         console.log(`🗑️ Found user to delete: ${user.nickname}`);
         
-        // ИСПРАВЛЕНО: Удаляем связанные данные
+        // Удаляем связанные данные
         try {
-            // Удаляем все чаты пользователя
             const Chat = require('../models/Chat');
             const deletedChats = await Chat.deleteMany({ participants: userId });
             console.log(`🗑️ Deleted ${deletedChats.deletedCount} chats`);
             
-            // Удаляем все сообщения пользователя
             const Message = require('../models/Message');
             const deletedMessages = await Message.deleteMany({ senderId: userId });
             console.log(`🗑️ Deleted ${deletedMessages.deletedCount} messages`);
             
         } catch (error) {
             console.log(`⚠️ Error deleting related data: ${error.message}`);
-            // Продолжаем удаление пользователя даже если не удалось удалить связанные данные
         }
         
         // Удаляем пользователя
         await User.findByIdAndDelete(userId);
         
-        console.log(`✅ User and all related data deleted: ${user.nickname}`);
+        console.log(`✅ Account and all related data deleted: ${user.nickname}`);
         
         res.json({ 
-            message: 'User account and all related data deleted successfully',
+            message: 'Account deleted successfully',
             deletedUser: {
                 id: userId,
                 nickname: user.nickname
@@ -237,7 +264,7 @@ router.delete('/:userId', async (req, res) => {
         });
         
     } catch (error) {
-        console.error('❌ Delete user error:', error);
+        console.error('❌ Delete account error:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
