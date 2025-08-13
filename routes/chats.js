@@ -1,8 +1,8 @@
 // =====================================================
-// ФАЙЛ: routes/chats.js (BACKEND)
+// ФАЙЛ: routes/chats.js (BACKEND) - ПОЛНОСТЬЮ ИСПРАВЛЕННАЯ ВЕРСИЯ
 // ПУТЬ: nickname-messenger-backend/routes/chats.js
 // ТИП: Node.js Backend
-// ОПИСАНИЕ: Полные защищенные чаты роуты с JWT
+// ОПИСАНИЕ: Исправленные чаты роуты с нормализацией UUID
 // =====================================================
 
 const express = require('express');
@@ -11,6 +11,33 @@ const Message = require('../models/Message');
 const { authenticateToken } = require('../middleware/auth');
 const router = express.Router();
 
+// Вспомогательная функция для нормализации UUID
+function normalizeUUID(uuid) {
+    if (!uuid || typeof uuid !== 'string') return uuid;
+    return uuid.toUpperCase();
+}
+
+// Вспомогательная функция для нормализации массива UUID
+function normalizeUUIDs(uuids) {
+    if (!Array.isArray(uuids)) return uuids;
+    return uuids.map(uuid => normalizeUUID(uuid));
+}
+
+// Вспомогательная функция для проверки доступа к чату
+function checkChatAccess(chat, userId) {
+    const userIdNormalized = normalizeUUID(userId);
+    const participantsNormalized = normalizeUUIDs(chat.participants);
+    
+    console.log('🔍 DEBUGGING CHAT ACCESS:');
+    console.log('   - User ID (normalized):', userIdNormalized);
+    console.log('   - Chat participants (normalized):', participantsNormalized);
+    
+    const hasAccess = participantsNormalized.includes(userIdNormalized);
+    console.log('   - Has access:', hasAccess);
+    
+    return hasAccess;
+}
+
 // Создание чата (ЗАЩИЩЕНО)
 router.post('/create', authenticateToken, async (req, res) => {
     try {
@@ -18,27 +45,45 @@ router.post('/create', authenticateToken, async (req, res) => {
         const currentUserId = req.user.id;
         
         console.log('💬 Creating chat request received from user:', req.user.nickname);
-        console.log('📝 Participants:', participants);
+        console.log('📝 Original participants:', participants);
+        console.log('🔐 Current user ID from JWT:', currentUserId);
         
         if (!participants || !Array.isArray(participants) || participants.length !== 2) {
             console.log('❌ Invalid participants format');
             return res.status(400).json({ error: 'Exactly 2 participants required' });
         }
         
-        // НОВОЕ: Проверяем что текущий пользователь является участником чата
-        if (!participants.includes(currentUserId)) {
+        // ИСПРАВЛЕНО: Нормализуем все UUID к uppercase
+        const normalizedParticipants = normalizeUUIDs(participants);
+        const normalizedCurrentUserId = normalizeUUID(currentUserId);
+        
+        console.log('🔄 NORMALIZATION:');
+        console.log('   - Original participants:', participants);
+        console.log('   - Normalized participants:', normalizedParticipants);
+        console.log('   - Original current user ID:', currentUserId);
+        console.log('   - Normalized current user ID:', normalizedCurrentUserId);
+        
+        // Проверяем что текущий пользователь является участником чата
+        if (!normalizedParticipants.includes(normalizedCurrentUserId)) {
             console.log('❌ Current user not in participants list');
             return res.status(403).json({ error: 'You must be a participant in the chat' });
         }
         
-        // Проверяем существующий чат
+        // Сортируем участников для консистентного поиска
+        const sortedParticipants = [...normalizedParticipants].sort();
+        
+        console.log('🔍 Looking for existing chat with sorted participants:', sortedParticipants);
+        
+        // Проверяем существующий чат с нормализованными участниками
         const existingChat = await Chat.findOne({
-            participants: { $all: participants },
+            participants: { $all: sortedParticipants },
             participants: { $size: 2 }
         }).populate('lastMessage');
         
         if (existingChat) {
             console.log('✅ Found existing chat:', existingChat._id);
+            console.log('   - Existing chat participants:', existingChat.participants);
+            
             return res.json({
                 _id: existingChat._id.toString(),
                 participants: existingChat.participants,
@@ -51,17 +96,18 @@ router.post('/create', authenticateToken, async (req, res) => {
             });
         }
         
-        // Создаем новый чат
-        console.log('💬 Creating new chat with participants:', participants);
+        // Создаем новый чат с нормализованными и отсортированными участниками
+        console.log('💬 Creating new chat with participants:', sortedParticipants);
         
         const chat = new Chat({ 
-            participants: participants,
+            participants: sortedParticipants,
             chatType: 'direct',
             isActive: true
         });
         
         await chat.save();
         console.log('✅ Chat created successfully:', chat._id);
+        console.log('   - Saved participants:', chat.participants);
         
         res.status(201).json({
             _id: chat._id.toString(),
@@ -87,16 +133,22 @@ router.get('/user/:userId', authenticateToken, async (req, res) => {
         const limit = parseInt(req.query.limit) || 50;
         const offset = parseInt(req.query.offset) || 0;
         
-        // НОВОЕ: Проверяем что пользователь запрашивает свои чаты
-        if (userId !== req.user.id) {
+        // Нормализуем ID
+        const normalizedUserId = normalizeUUID(userId);
+        const normalizedCurrentUserId = normalizeUUID(req.user.id);
+        
+        console.log('💬 Getting chats for user:', userId);
+        console.log('   - Normalized user ID:', normalizedUserId);
+        console.log('   - Normalized current user ID:', normalizedCurrentUserId);
+        
+        // Проверяем что пользователь запрашивает свои чаты
+        if (normalizedUserId !== normalizedCurrentUserId) {
             console.log('❌ User trying to access another user\'s chats');
             return res.status(403).json({ error: 'Access denied. You can only view your own chats' });
         }
         
-        console.log('💬 Getting chats for authenticated user:', req.user.nickname);
-        
         const chats = await Chat.find({ 
-            participants: userId,
+            participants: normalizedUserId,
             isActive: true 
         })
         .populate('lastMessage')
@@ -131,10 +183,14 @@ router.get('/my', authenticateToken, async (req, res) => {
         const limit = parseInt(req.query.limit) || 50;
         const offset = parseInt(req.query.offset) || 0;
         
+        // Нормализуем текущий user ID
+        const normalizedCurrentUserId = normalizeUUID(req.user.id);
+        
         console.log('💬 Getting chats for authenticated user:', req.user.nickname);
+        console.log('   - Normalized user ID:', normalizedCurrentUserId);
         
         const chats = await Chat.find({ 
-            participants: req.user.id,
+            participants: normalizedCurrentUserId,
             isActive: true 
         })
         .populate('lastMessage')
@@ -177,8 +233,8 @@ router.get('/:chatId', authenticateToken, async (req, res) => {
             return res.status(404).json({ error: 'Chat not found' });
         }
         
-        // НОВОЕ: Проверяем что пользователь является участником чата
-        if (!chat.participants.includes(req.user.id)) {
+        // ИСПРАВЛЕНО: Используем функцию проверки доступа с нормализацией
+        if (!checkChatAccess(chat, req.user.id)) {
             console.log('❌ User not a participant of this chat');
             return res.status(403).json({ error: 'Access denied. You are not a participant of this chat' });
         }
@@ -218,7 +274,7 @@ router.put('/:chatId', authenticateToken, async (req, res) => {
         }
         
         // Проверяем что пользователь является участником чата
-        if (!chat.participants.includes(req.user.id)) {
+        if (!checkChatAccess(chat, req.user.id)) {
             console.log('❌ User not a participant of this chat');
             return res.status(403).json({ error: 'Access denied. You are not a participant of this chat' });
         }
@@ -266,8 +322,8 @@ router.delete('/:chatId', authenticateToken, async (req, res) => {
             return res.status(404).json({ error: 'Chat not found' });
         }
         
-        // НОВОЕ: Проверяем что пользователь является участником чата
-        if (!chat.participants.includes(req.user.id)) {
+        // Проверяем что пользователь является участником чата
+        if (!checkChatAccess(chat, req.user.id)) {
             console.log('❌ User not a participant of this chat');
             return res.status(403).json({ error: 'Access denied. You are not a participant of this chat' });
         }
@@ -304,7 +360,7 @@ router.get('/:chatId/participants', authenticateToken, async (req, res) => {
         }
         
         // Проверяем что пользователь является участником чата
-        if (!chat.participants.includes(req.user.id)) {
+        if (!checkChatAccess(chat, req.user.id)) {
             console.log('❌ User not a participant of this chat');
             return res.status(403).json({ error: 'Access denied. You are not a participant of this chat' });
         }
@@ -354,7 +410,7 @@ router.post('/:chatId/leave', authenticateToken, async (req, res) => {
         }
         
         // Проверяем что пользователь является участником чата
-        if (!chat.participants.includes(req.user.id)) {
+        if (!checkChatAccess(chat, req.user.id)) {
             console.log('❌ User not a participant of this chat');
             return res.status(403).json({ error: 'You are not a participant of this chat' });
         }
@@ -373,7 +429,10 @@ router.post('/:chatId/leave', authenticateToken, async (req, res) => {
         }
         
         // Для групповых чатов удаляем пользователя из участников
-        chat.participants = chat.participants.filter(participantId => participantId !== req.user.id);
+        const normalizedCurrentUserId = normalizeUUID(req.user.id);
+        chat.participants = chat.participants.filter(participantId => 
+            normalizeUUID(participantId) !== normalizedCurrentUserId
+        );
         
         // Если остался только один участник, помечаем чат как неактивный
         if (chat.participants.length <= 1) {
@@ -411,7 +470,7 @@ router.get('/:chatId/stats', authenticateToken, async (req, res) => {
         }
         
         // Проверяем что пользователь является участником чата
-        if (!chat.participants.includes(req.user.id)) {
+        if (!checkChatAccess(chat, req.user.id)) {
             console.log('❌ User not a participant of this chat');
             return res.status(403).json({ error: 'Access denied. You are not a participant of this chat' });
         }
@@ -419,10 +478,12 @@ router.get('/:chatId/stats', authenticateToken, async (req, res) => {
         // Получаем статистику сообщений
         const Message = require('../models/Message');
         
+        const normalizedCurrentUserId = normalizeUUID(req.user.id);
+        
         const totalMessages = await Message.countDocuments({ chatId });
         const userMessages = await Message.countDocuments({ 
             chatId, 
-            senderId: req.user.id 
+            senderId: normalizedCurrentUserId
         });
         
         const firstMessage = await Message.findOne({ chatId })
