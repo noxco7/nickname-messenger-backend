@@ -1,8 +1,8 @@
 // =====================================================
-// ФАЙЛ: routes/chats.js (BACKEND) - ПОЛНОСТЬЮ ИСПРАВЛЕННАЯ ВЕРСИЯ
+// ФАЙЛ: routes/chats.js (BACKEND) - ПОЛНАЯ ИСПРАВЛЕННАЯ ВЕРСИЯ
 // ПУТЬ: nickname-messenger-backend/routes/chats.js
 // ТИП: Node.js Backend
-// ОПИСАНИЕ: Исправленные чаты роуты с нормализацией UUID
+// ОПИСАНИЕ: Исправленные чаты роуты с правильным возвратом lastMessage как String ID
 // =====================================================
 
 const express = require('express');
@@ -36,6 +36,20 @@ function checkChatAccess(chat, userId) {
     console.log('   - Has access:', hasAccess);
     
     return hasAccess;
+}
+
+// Вспомогательная функция для форматирования чата (БЕЗ populate lastMessage)
+function formatChatResponse(chat) {
+    return {
+        _id: chat._id.toString(),
+        participants: chat.participants,
+        lastMessage: chat.lastMessage ? chat.lastMessage.toString() : null, // ТОЛЬКО ID как String
+        lastMessageAt: chat.lastMessageAt,
+        chatType: chat.chatType,
+        isActive: chat.isActive,
+        createdAt: chat.createdAt,
+        updatedAt: chat.updatedAt
+    };
 }
 
 // Создание чата (ЗАЩИЩЕНО)
@@ -74,26 +88,18 @@ router.post('/create', authenticateToken, async (req, res) => {
         
         console.log('🔍 Looking for existing chat with sorted participants:', sortedParticipants);
         
-        // Проверяем существующий чат с нормализованными участниками
+        // ИСПРАВЛЕНО: НЕ популяризируем lastMessage при поиске
         const existingChat = await Chat.findOne({
             participants: { $all: sortedParticipants },
             participants: { $size: 2 }
-        }).populate('lastMessage');
+        });
         
         if (existingChat) {
             console.log('✅ Found existing chat:', existingChat._id);
             console.log('   - Existing chat participants:', existingChat.participants);
             
-            return res.json({
-                _id: existingChat._id.toString(),
-                participants: existingChat.participants,
-                lastMessage: existingChat.lastMessage,
-                lastMessageAt: existingChat.lastMessageAt,
-                chatType: existingChat.chatType,
-                isActive: existingChat.isActive,
-                createdAt: existingChat.createdAt,
-                updatedAt: existingChat.updatedAt
-            });
+            // ИСПРАВЛЕНО: Возвращаем lastMessage как String ID
+            return res.json(formatChatResponse(existingChat));
         }
         
         // Создаем новый чат с нормализованными и отсортированными участниками
@@ -109,16 +115,8 @@ router.post('/create', authenticateToken, async (req, res) => {
         console.log('✅ Chat created successfully:', chat._id);
         console.log('   - Saved participants:', chat.participants);
         
-        res.status(201).json({
-            _id: chat._id.toString(),
-            participants: chat.participants,
-            lastMessage: chat.lastMessage,
-            lastMessageAt: chat.lastMessageAt,
-            chatType: chat.chatType,
-            isActive: chat.isActive,
-            createdAt: chat.createdAt,
-            updatedAt: chat.updatedAt
-        });
+        // ИСПРАВЛЕНО: Возвращаем lastMessage как String ID
+        res.status(201).json(formatChatResponse(chat));
         
     } catch (error) {
         console.error('❌ Create chat error:', error);
@@ -147,27 +145,19 @@ router.get('/user/:userId', authenticateToken, async (req, res) => {
             return res.status(403).json({ error: 'Access denied. You can only view your own chats' });
         }
         
+        // ИСПРАВЛЕНО: НЕ популяризируем lastMessage
         const chats = await Chat.find({ 
             participants: normalizedUserId,
             isActive: true 
         })
-        .populate('lastMessage')
         .sort({ lastMessageAt: -1 })
         .limit(limit)
         .skip(offset);
         
         console.log(`✅ Found ${chats.length} chats for user ${req.user.nickname}`);
         
-        const formattedChats = chats.map(chat => ({
-            _id: chat._id.toString(),
-            participants: chat.participants,
-            lastMessage: chat.lastMessage,
-            lastMessageAt: chat.lastMessageAt,
-            chatType: chat.chatType,
-            isActive: chat.isActive,
-            createdAt: chat.createdAt,
-            updatedAt: chat.updatedAt
-        }));
+        // ИСПРАВЛЕНО: Форматируем с lastMessage как String ID
+        const formattedChats = chats.map(formatChatResponse);
         
         res.json(formattedChats);
         
@@ -189,21 +179,56 @@ router.get('/my', authenticateToken, async (req, res) => {
         console.log('💬 Getting chats for authenticated user:', req.user.nickname);
         console.log('   - Normalized user ID:', normalizedCurrentUserId);
         
+        // ИСПРАВЛЕНО: НЕ популяризируем lastMessage
         const chats = await Chat.find({ 
             participants: normalizedCurrentUserId,
             isActive: true 
         })
-        .populate('lastMessage')
         .sort({ lastMessageAt: -1 })
         .limit(limit)
         .skip(offset);
         
         console.log(`✅ Found ${chats.length} chats for user ${req.user.nickname}`);
         
+        // ИСПРАВЛЕНО: Форматируем с lastMessage как String ID
+        const formattedChats = chats.map(formatChatResponse);
+        
+        res.json(formattedChats);
+        
+    } catch (error) {
+        console.error('❌ Get my chats error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// НОВОЕ: Получение чатов с полной информацией о последних сообщениях
+router.get('/my/with-messages', authenticateToken, async (req, res) => {
+    try {
+        const limit = parseInt(req.query.limit) || 50;
+        const offset = parseInt(req.query.offset) || 0;
+        
+        const normalizedCurrentUserId = normalizeUUID(req.user.id);
+        
+        console.log('💬 Getting chats with full message info for user:', req.user.nickname);
+        console.log('   - Normalized user ID:', normalizedCurrentUserId);
+        
+        // ЗДЕСЬ популяризируем lastMessage для полной информации
+        const chats = await Chat.find({ 
+            participants: normalizedCurrentUserId,
+            isActive: true 
+        })
+        .populate('lastMessage') // Популяризируем для полной информации
+        .sort({ lastMessageAt: -1 })
+        .limit(limit)
+        .skip(offset);
+        
+        console.log(`✅ Found ${chats.length} chats with full message info`);
+        
+        // Возвращаем полные объекты сообщений
         const formattedChats = chats.map(chat => ({
             _id: chat._id.toString(),
             participants: chat.participants,
-            lastMessage: chat.lastMessage,
+            lastMessage: chat.lastMessage, // ПОЛНЫЙ объект Message
             lastMessageAt: chat.lastMessageAt,
             chatType: chat.chatType,
             isActive: chat.isActive,
@@ -214,7 +239,7 @@ router.get('/my', authenticateToken, async (req, res) => {
         res.json(formattedChats);
         
     } catch (error) {
-        console.error('❌ Get my chats error:', error);
+        console.error('❌ Get chats with messages error:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
@@ -226,7 +251,8 @@ router.get('/:chatId', authenticateToken, async (req, res) => {
         
         console.log(`💬 Getting chat ${chatId} for user: ${req.user.nickname}`);
         
-        const chat = await Chat.findById(chatId).populate('lastMessage');
+        // ИСПРАВЛЕНО: НЕ популяризируем lastMessage
+        const chat = await Chat.findById(chatId);
         
         if (!chat) {
             console.log('❌ Chat not found');
@@ -241,10 +267,42 @@ router.get('/:chatId', authenticateToken, async (req, res) => {
         
         console.log(`✅ Chat found and user is participant`);
         
+        // ИСПРАВЛЕНО: Форматируем с lastMessage как String ID
+        res.json(formatChatResponse(chat));
+        
+    } catch (error) {
+        console.error('❌ Get chat error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// Получение информации о конкретном чате с полным lastMessage (ЗАЩИЩЕНО)
+router.get('/:chatId/with-message', authenticateToken, async (req, res) => {
+    try {
+        const { chatId } = req.params;
+        
+        console.log(`💬 Getting chat ${chatId} with full message for user: ${req.user.nickname}`);
+        
+        // ЗДЕСЬ популяризируем lastMessage
+        const chat = await Chat.findById(chatId).populate('lastMessage');
+        
+        if (!chat) {
+            console.log('❌ Chat not found');
+            return res.status(404).json({ error: 'Chat not found' });
+        }
+        
+        if (!checkChatAccess(chat, req.user.id)) {
+            console.log('❌ User not a participant of this chat');
+            return res.status(403).json({ error: 'Access denied. You are not a participant of this chat' });
+        }
+        
+        console.log(`✅ Chat found with full message info`);
+        
+        // Возвращаем с полным объектом lastMessage
         res.json({
             _id: chat._id.toString(),
             participants: chat.participants,
-            lastMessage: chat.lastMessage,
+            lastMessage: chat.lastMessage, // ПОЛНЫЙ объект Message
             lastMessageAt: chat.lastMessageAt,
             chatType: chat.chatType,
             isActive: chat.isActive,
@@ -253,7 +311,7 @@ router.get('/:chatId', authenticateToken, async (req, res) => {
         });
         
     } catch (error) {
-        console.error('❌ Get chat error:', error);
+        console.error('❌ Get chat with message error:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
@@ -290,16 +348,7 @@ router.put('/:chatId', authenticateToken, async (req, res) => {
         
         res.json({
             message: 'Chat updated successfully',
-            chat: {
-                _id: chat._id.toString(),
-                participants: chat.participants,
-                lastMessage: chat.lastMessage,
-                lastMessageAt: chat.lastMessageAt,
-                chatType: chat.chatType,
-                isActive: chat.isActive,
-                createdAt: chat.createdAt,
-                updatedAt: chat.updatedAt
-            }
+            chat: formatChatResponse(chat)
         });
         
     } catch (error) {
