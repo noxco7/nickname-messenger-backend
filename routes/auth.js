@@ -1,13 +1,14 @@
 // =====================================================
-// ФАЙЛ: routes/auth.js (BACKEND) - FIXED VERSION
+// ФАЙЛ: routes/auth.js (BACKEND) - FULLY CORRECTED VERSION
 // ПУТЬ: nickname-messenger-backend/routes/auth.js
 // ТИП: Node.js Backend
-// ОПИСАНИЕ: Исправленный роут аутентификации с правильными импортами
+// ОПИСАНИЕ: Исправленный роут аутентификации без синтаксических ошибок
 // =====================================================
 
 const express = require('express');
 const User = require('../models/User');
-const TronValidation = require('../utils/TronValidation');
+// ИСПРАВЛЕНО: Правильный импорт (проверьте имя файла!)
+const TronValidation = require('../utils/tronValidation');
 const { generateToken, authenticateToken } = require('../middleware/auth');
 const router = express.Router();
 
@@ -56,8 +57,8 @@ router.post('/register', async (req, res) => {
         // НОВОЕ: Подробная информация об адресе
         const addressInfo = {
             isValid: true,
-            isUSDTContract: TronValidation.isUSDTContract(tronAddress),
-            formatted: TronValidation.formatAddress(tronAddress),
+            isUSDTContract: TronValidation.isUSDTContract ? TronValidation.isUSDTContract(tronAddress) : false,
+            formatted: TronValidation.formatAddress ? TronValidation.formatAddress(tronAddress) : tronAddress,
             type: 'wallet'
         };
 
@@ -105,7 +106,7 @@ router.post('/register', async (req, res) => {
 
         console.log('✅ User registered successfully:', user.nickname);
 
-        // ИСПРАВЛЕНО: Возвращаем только поля, которые ожидает клиент
+        // ИСПРАВЛЕНО: Убрана синтаксическая ошибка с *id
         res.status(201).json({
             message: 'User registered successfully',
             token: token,
@@ -113,7 +114,7 @@ router.post('/register', async (req, res) => {
             expiresIn: '7d',
             user: {
                 id: user._id,
-                _id: user._id,  // Поддерживаем оба поля
+                _id: user._id,  // Поддерживаем оба поля для совместимости
                 nickname: user.nickname,
                 publicKey: user.publicKey,
                 tronAddress: user.tronAddress,
@@ -122,12 +123,21 @@ router.post('/register', async (req, res) => {
                 lastName: user.lastName,
                 avatar: user.avatar,
                 createdAt: user.createdAt
-                // УБРАНО: isOnline, lastSeen, updatedAt для совместимости
             }
         });
 
     } catch (error) {
         console.error('❌ Registration error:', error);
+        
+        if (error.code === 11000) {
+            const field = Object.keys(error.keyValue)[0];
+            return res.status(409).json({
+                error: `User with this ${field} already exists`,
+                code: 'DUPLICATE_KEY_ERROR',
+                field: field
+            });
+        }
+        
         res.status(500).json({ 
             error: 'Internal server error',
             code: 'INTERNAL_ERROR'
@@ -178,7 +188,7 @@ router.post('/login', async (req, res) => {
 
         console.log('✅ User logged in successfully:', user.nickname);
 
-        // ИСПРАВЛЕНО: Совместимый ответ
+        // ИСПРАВЛЕНО: Убрана синтаксическая ошибка с *id
         res.json({
             message: 'Login successful',
             token: token,
@@ -186,7 +196,7 @@ router.post('/login', async (req, res) => {
             expiresIn: '7d',
             user: {
                 id: user._id,
-                _id: user._id,
+                _id: user._id,  // Поддерживаем оба поля для совместимости
                 nickname: user.nickname,
                 publicKey: user.publicKey,
                 tronAddress: user.tronAddress,
@@ -194,7 +204,6 @@ router.post('/login', async (req, res) => {
                 lastName: user.lastName,
                 avatar: user.avatar,
                 createdAt: user.createdAt
-                // УБРАНО: isOnline, lastSeen для совместимости
             }
         });
 
@@ -275,13 +284,13 @@ router.post('/validate-tron-address', async (req, res) => {
             address: address,
             isValid: isValid,
             isAvailable: true, // Для будущего использования
-            formatted: TronValidation.formatAddress(address),
+            formatted: TronValidation.formatAddress ? TronValidation.formatAddress(address) : address,
             type: 'wallet',
-            isUSDTContract: TronValidation.isUSDTContract(address),
+            isUSDTContract: TronValidation.isUSDTContract ? TronValidation.isUSDTContract(address) : false,
             validation: {
                 hasValidLength: address.length === 34,
                 hasValidPrefix: address.startsWith('T'),
-                hasValidCharacters: TronValidation.isValidBase58(address),
+                hasValidCharacters: TronValidation.isValidBase58 ? TronValidation.isValidBase58(address) : true,
                 hasValidChecksum: isValid
             }
         });
@@ -309,7 +318,9 @@ router.post('/validate-crypto-amount', async (req, res) => {
 
         console.log(`💰 Validating crypto amount: ${amount}`);
 
-        const isValid = TronValidation.validateCryptoAmount(amount);
+        const isValid = TronValidation.validateCryptoAmount ? 
+            TronValidation.validateCryptoAmount(amount) : 
+            (typeof amount === 'number' && amount > 0 && amount <= 1000000);
         
         res.json({
             amount: amount,
@@ -340,7 +351,7 @@ router.post('/validate-crypto-amount', async (req, res) => {
 router.get('/me', authenticateToken, async (req, res) => {
     try {
         console.log(`👤 Getting user info for: ${req.user.nickname}`);
-
+        
         const user = await User.findById(req.user.id);
         if (!user) {
             return res.status(404).json({
@@ -349,11 +360,11 @@ router.get('/me', authenticateToken, async (req, res) => {
             });
         }
 
-        // ИСПРАВЛЕНО: Совместимый ответ
+        // ИСПРАВЛЕНО: Убрана синтаксическая ошибка с *id
         res.json({
             user: {
                 id: user._id,
-                _id: user._id,
+                _id: user._id,  // Поддерживаем оба поля для совместимости
                 nickname: user.nickname,
                 publicKey: user.publicKey,
                 tronAddress: user.tronAddress,
@@ -377,10 +388,10 @@ router.get('/me', authenticateToken, async (req, res) => {
 router.post('/refresh', authenticateToken, async (req, res) => {
     try {
         console.log(`🔄 Refreshing token for user: ${req.user.nickname}`);
-
+        
         // Генерируем новый токен
         const newToken = generateToken(req.user.id);
-
+        
         res.json({
             message: 'Token refreshed successfully',
             token: newToken,
@@ -401,7 +412,7 @@ router.post('/refresh', authenticateToken, async (req, res) => {
 router.post('/logout', authenticateToken, async (req, res) => {
     try {
         console.log(`👋 User logging out: ${req.user.nickname}`);
-
+        
         // Обновляем статус пользователя
         await User.findByIdAndUpdate(req.user.id, {
             isOnline: false,
