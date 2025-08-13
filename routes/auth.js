@@ -1,8 +1,8 @@
 // =====================================================
-// ФАЙЛ: routes/auth.js (BACKEND) - FIXED REGISTRATION
+// ФАЙЛ: routes/auth.js (BACKEND) - FIXED VERSION
 // ПУТЬ: nickname-messenger-backend/routes/auth.js
 // ТИП: Node.js Backend
-// ОПИСАНИЕ: Исправленный роут регистрации для совместимости с iOS
+// ОПИСАНИЕ: Исправленный роут аутентификации с правильными импортами
 // =====================================================
 
 const express = require('express');
@@ -56,8 +56,8 @@ router.post('/register', async (req, res) => {
         // НОВОЕ: Подробная информация об адресе
         const addressInfo = {
             isValid: true,
-            isUSDTContract: tronAddress === 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',
-            formatted: `${tronAddress.substring(0, 6)}...${tronAddress.substring(tronAddress.length - 6)}`,
+            isUSDTContract: TronValidation.isUSDTContract(tronAddress),
+            formatted: TronValidation.formatAddress(tronAddress),
             type: 'wallet'
         };
 
@@ -255,6 +255,87 @@ router.post('/check-nickname', async (req, res) => {
     }
 });
 
+// Валидация TRON адреса (НОВОЕ)
+router.post('/validate-tron-address', async (req, res) => {
+    try {
+        const { address } = req.body;
+
+        if (!address) {
+            return res.status(400).json({
+                error: 'Address is required',
+                code: 'MISSING_ADDRESS'
+            });
+        }
+
+        console.log(`🔍 Validating TRON address: ${address}`);
+
+        const isValid = TronValidation.validateTronAddress(address);
+        
+        res.json({
+            address: address,
+            isValid: isValid,
+            isAvailable: true, // Для будущего использования
+            formatted: TronValidation.formatAddress(address),
+            type: 'wallet',
+            isUSDTContract: TronValidation.isUSDTContract(address),
+            validation: {
+                hasValidLength: address.length === 34,
+                hasValidPrefix: address.startsWith('T'),
+                hasValidCharacters: TronValidation.isValidBase58(address),
+                hasValidChecksum: isValid
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ TRON address validation error:', error);
+        res.status(500).json({ 
+            error: 'Internal server error',
+            code: 'INTERNAL_ERROR'
+        });
+    }
+});
+
+// Валидация криптосуммы (НОВОЕ)
+router.post('/validate-crypto-amount', async (req, res) => {
+    try {
+        const { amount } = req.body;
+
+        if (amount === undefined || amount === null) {
+            return res.status(400).json({
+                error: 'Amount is required',
+                code: 'MISSING_AMOUNT'
+            });
+        }
+
+        console.log(`💰 Validating crypto amount: ${amount}`);
+
+        const isValid = TronValidation.validateCryptoAmount(amount);
+        
+        res.json({
+            amount: amount,
+            isValid: isValid,
+            validation: {
+                isNumber: typeof amount === 'number' && isFinite(amount),
+                isPositive: amount > 0,
+                isInRange: amount >= 0.000001 && amount <= 1000000,
+                hasValidDecimals: amount.toString().split('.')[1]?.length <= 6 || true
+            },
+            limits: {
+                min: 0.000001,
+                max: 1000000,
+                maxDecimals: 6
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Crypto amount validation error:', error);
+        res.status(500).json({ 
+            error: 'Internal server error',
+            code: 'INTERNAL_ERROR'
+        });
+    }
+});
+
 // Получение информации о текущем пользователе (защищено)
 router.get('/me', authenticateToken, async (req, res) => {
     try {
@@ -285,6 +366,30 @@ router.get('/me', authenticateToken, async (req, res) => {
 
     } catch (error) {
         console.error('❌ Get user info error:', error);
+        res.status(500).json({ 
+            error: 'Internal server error',
+            code: 'INTERNAL_ERROR'
+        });
+    }
+});
+
+// Обновление токена (НОВОЕ)
+router.post('/refresh', authenticateToken, async (req, res) => {
+    try {
+        console.log(`🔄 Refreshing token for user: ${req.user.nickname}`);
+
+        // Генерируем новый токен
+        const newToken = generateToken(req.user.id);
+
+        res.json({
+            message: 'Token refreshed successfully',
+            token: newToken,
+            tokenType: 'Bearer',
+            expiresIn: '7d'
+        });
+
+    } catch (error) {
+        console.error('❌ Token refresh error:', error);
         res.status(500).json({ 
             error: 'Internal server error',
             code: 'INTERNAL_ERROR'
