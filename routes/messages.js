@@ -1,8 +1,8 @@
 // =====================================================
-// ФАЙЛ: routes/messages.js (BACKEND)
+// ФАЙЛ: routes/messages.js (BACKEND) - FIXED WITH DEBUGGING
 // ПУТЬ: nickname-messenger-backend/routes/messages.js
 // ТИП: Node.js Backend
-// ОПИСАНИЕ: Защищенные сообщения роуты с JWT
+// ОПИСАНИЕ: Исправленные сообщения роуты с отладкой
 // =====================================================
 
 const express = require('express');
@@ -20,12 +20,16 @@ router.post('/send', authenticateToken, async (req, res) => {
             messageType = 'text',
             cryptoAmount,
             transactionHash,
-            transactionStatus
+            transactionStatus,
+            // НОВОЕ: E2E шифрование
+            isEncrypted = false,
+            encryptionData
         } = req.body;
         
         const senderId = req.user.id; // Получаем из JWT токена
         
         console.log(`📤 Sending message from ${req.user.nickname} to chat ${chatId}`);
+        console.log(`📤 Message type: ${messageType}, encrypted: ${isEncrypted}`);
         
         if (!chatId || !content) {
             return res.status(400).json({
@@ -33,20 +37,51 @@ router.post('/send', authenticateToken, async (req, res) => {
             });
         }
         
-        // НОВОЕ: Проверяем существование чата и участие пользователя
+        // ИСПРАВЛЕНО: Проверяем существование чата и участие пользователя с отладкой
         const chat = await Chat.findById(chatId);
         if (!chat) {
             console.log('❌ Chat not found');
             return res.status(404).json({ error: 'Chat not found' });
         }
         
-        if (!chat.participants.includes(senderId)) {
+        // ОТЛАДКА: Выводим подробную информацию
+        console.log(`🔍 DEBUGGING CHAT PARTICIPANTS:`);
+        console.log(`   - Chat ID: ${chatId}`);
+        console.log(`   - User ID: ${senderId}`);
+        console.log(`   - User ID type: ${typeof senderId}`);
+        console.log(`   - Chat participants:`, chat.participants);
+        console.log(`   - Chat participants types:`, chat.participants.map(p => typeof p));
+        
+        // ИСПРАВЛЕНО: Приводим все к строкам для корректного сравнения
+        const userIdStr = String(senderId);
+        const participantStrs = chat.participants.map(p => String(p));
+        const isParticipant = participantStrs.includes(userIdStr);
+        
+        console.log(`   - User ID as string: "${userIdStr}"`);
+        console.log(`   - Participants as strings:`, participantStrs);
+        console.log(`   - Is participant: ${isParticipant}`);
+        
+        if (!isParticipant) {
             console.log('❌ User not authorized to send message to this chat');
-            return res.status(403).json({ error: 'Access denied. You are not a participant of this chat' });
+            return res.status(403).json({ 
+                error: 'Access denied. You are not a participant of this chat',
+                debug: {
+                    userId: userIdStr,
+                    participants: participantStrs,
+                    chatId: chatId
+                }
+            });
         }
         
         // Создаем сообщение
-        const messageData = { chatId, senderId, content, messageType };
+        const messageData = { 
+            chatId, 
+            senderId, 
+            content, 
+            messageType,
+            isEncrypted,
+            encryptionData: isEncrypted ? encryptionData : null
+        };
         
         if (messageType === 'crypto') {
             if (cryptoAmount) messageData.cryptoAmount = cryptoAmount;
@@ -75,7 +110,7 @@ router.post('/send', authenticateToken, async (req, res) => {
     }
 });
 
-// Получение сообщений чата (ЗАЩИЩЕНО)
+// Получение сообщений чата (ЗАЩИЩЕНО) - ИСПРАВЛЕНО
 router.get('/:chatId', authenticateToken, async (req, res) => {
     try {
         const { chatId } = req.params;
@@ -83,18 +118,45 @@ router.get('/:chatId', authenticateToken, async (req, res) => {
         const offset = parseInt(req.query.offset) || 0;
         
         console.log(`📥 Getting messages for chat ${chatId} by user: ${req.user.nickname}`);
+        console.log(`📥 User ID: ${req.user.id} (type: ${typeof req.user.id})`);
         
-        // НОВОЕ: Проверяем доступ к чату
+        // ИСПРАВЛЕНО: Проверяем доступ к чату с отладкой
         const chat = await Chat.findById(chatId);
         if (!chat) {
             console.log('❌ Chat not found');
             return res.status(404).json({ error: 'Chat not found' });
         }
         
-        if (!chat.participants.includes(req.user.id)) {
+        // ОТЛАДКА: Выводим подробную информацию о проверке доступа
+        console.log(`🔍 DEBUGGING CHAT ACCESS:`);
+        console.log(`   - Chat ID: ${chatId}`);
+        console.log(`   - User ID: ${req.user.id}`);
+        console.log(`   - User ID type: ${typeof req.user.id}`);
+        console.log(`   - Chat participants:`, chat.participants);
+        console.log(`   - Chat participants types:`, chat.participants.map(p => typeof p));
+        
+        // ИСПРАВЛЕНО: Приводим все к строкам для корректного сравнения
+        const userIdStr = String(req.user.id);
+        const participantStrs = chat.participants.map(p => String(p));
+        const hasAccess = participantStrs.includes(userIdStr);
+        
+        console.log(`   - User ID as string: "${userIdStr}"`);
+        console.log(`   - Participants as strings:`, participantStrs);
+        console.log(`   - Has access: ${hasAccess}`);
+        
+        if (!hasAccess) {
             console.log('❌ User not authorized to view messages in this chat');
-            return res.status(403).json({ error: 'Access denied. You are not a participant of this chat' });
+            return res.status(403).json({ 
+                error: 'Access denied. You are not a participant of this chat',
+                debug: {
+                    userId: userIdStr,
+                    participants: participantStrs,
+                    chatId: chatId
+                }
+            });
         }
+        
+        console.log(`✅ User has access to chat, loading messages...`);
         
         const messages = await Message.find({ chatId })
             .populate('senderId', 'nickname firstName lastName avatar')
@@ -126,9 +188,14 @@ router.put('/:messageId/status', authenticateToken, async (req, res) => {
             return res.status(404).json({ error: 'Message not found' });
         }
         
-        // НОВОЕ: Проверяем что пользователь является отправителем
-        if (message.senderId !== req.user.id) {
+        // ИСПРАВЛЕНО: Приводим к строкам для сравнения
+        const userIdStr = String(req.user.id);
+        const senderIdStr = String(message.senderId);
+        
+        if (senderIdStr !== userIdStr) {
             console.log('❌ User not authorized to update this message');
+            console.log(`   - User ID: "${userIdStr}"`);
+            console.log(`   - Sender ID: "${senderIdStr}"`);
             return res.status(403).json({ error: 'Access denied. You can only update your own messages' });
         }
         
@@ -167,124 +234,59 @@ router.post('/:chatId/mark-read', authenticateToken, async (req, res) => {
             return res.status(404).json({ error: 'Chat not found' });
         }
         
-        if (!chat.participants.includes(req.user.id)) {
+        // ИСПРАВЛЕНО: Приводим к строкам для сравнения
+        const userIdStr = String(req.user.id);
+        const participantStrs = chat.participants.map(p => String(p));
+        
+        if (!participantStrs.includes(userIdStr)) {
             console.log('❌ User not authorized to mark messages in this chat');
-            return res.status(403).json({ error: 'Access denied. You are not a participant of this chat' });
+            return res.status(403).json({ 
+                error: 'Access denied. You are not a participant of this chat',
+                debug: {
+                    userId: userIdStr,
+                    participants: participantStrs
+                }
+            });
         }
         
-        let query = { chatId };
+        let markedCount = 0;
+        
         if (messageIds && Array.isArray(messageIds)) {
-            query._id = { $in: messageIds };
-        }
-        
-        // Обновляем статус прочтения
-        const result = await Message.updateMany(
-            query,
-            {
-                $addToSet: {
-                    readBy: {
-                        userId: req.user.id,
-                        readAt: new Date()
+            // Помечаем конкретные сообщения
+            for (const messageId of messageIds) {
+                const message = await Message.findById(messageId);
+                if (message && String(message.chatId) === chatId) {
+                    if (!message.isReadBy(req.user.id)) {
+                        message.markAsRead(req.user.id);
+                        await message.save();
+                        markedCount++;
                     }
                 }
             }
-        );
+        } else {
+            // Помечаем все непрочитанные сообщения в чате
+            const unreadMessages = await Message.find({
+                chatId: chatId,
+                senderId: { $ne: req.user.id }, // Не помечаем свои сообщения
+                'readReceipts.userId': { $ne: req.user.id }
+            });
+            
+            for (const message of unreadMessages) {
+                message.markAsRead(req.user.id);
+                await message.save();
+                markedCount++;
+            }
+        }
         
-        console.log(`✅ Marked ${result.modifiedCount} messages as read`);
+        console.log(`✅ Marked ${markedCount} messages as read`);
         
         res.json({
-            message: 'Messages marked as read',
-            markedCount: result.modifiedCount
+            message: `Marked ${markedCount} messages as read`,
+            markedCount: markedCount
         });
         
     } catch (error) {
         console.error('❌ Mark messages as read error:', error);
-        res.status(500).json({ error: 'Internal server error' });
-    }
-});
-
-// Удаление сообщения (ЗАЩИЩЕНО - только отправитель)
-router.delete('/:messageId', authenticateToken, async (req, res) => {
-    try {
-        const { messageId } = req.params;
-        
-        console.log(`🗑️ Deleting message ${messageId} by user: ${req.user.nickname}`);
-        
-        const message = await Message.findById(messageId);
-        if (!message) {
-            console.log('❌ Message not found');
-            return res.status(404).json({ error: 'Message not found' });
-        }
-        
-        // НОВОЕ: Проверяем что пользователь является отправителем
-        if (message.senderId !== req.user.id) {
-            console.log('❌ User not authorized to delete this message');
-            return res.status(403).json({ error: 'Access denied. You can only delete your own messages' });
-        }
-        
-        await Message.findByIdAndDelete(messageId);
-        
-        console.log(`✅ Message deleted: ${messageId}`);
-        
-        res.json({
-            message: 'Message deleted successfully',
-            messageId: messageId
-        });
-        
-    } catch (error) {
-        console.error('❌ Delete message error:', error);
-        res.status(500).json({ error: 'Internal server error' });
-    }
-});
-
-// Поиск сообщений в чате (ЗАЩИЩЕНО)
-router.get('/:chatId/search', authenticateToken, async (req, res) => {
-    try {
-        const { chatId } = req.params;
-        const { query, limit = 20, offset = 0 } = req.query;
-        
-        console.log(`🔍 Searching messages in chat ${chatId} by user: ${req.user.nickname}`);
-        
-        // Проверяем доступ к чату
-        const chat = await Chat.findById(chatId);
-        if (!chat) {
-            return res.status(404).json({ error: 'Chat not found' });
-        }
-        
-        if (!chat.participants.includes(req.user.id)) {
-            return res.status(403).json({ error: 'Access denied. You are not a participant of this chat' });
-        }
-        
-        if (!query) {
-            return res.json({ messages: [], total: 0 });
-        }
-        
-        const searchRegex = new RegExp(query, 'i');
-        
-        const messages = await Message.find({
-            chatId,
-            content: searchRegex
-        })
-        .populate('senderId', 'nickname firstName lastName avatar')
-        .sort({ createdAt: -1 })
-        .limit(parseInt(limit))
-        .skip(parseInt(offset));
-        
-        const total = await Message.countDocuments({
-            chatId,
-            content: searchRegex
-        });
-        
-        console.log(`✅ Found ${messages.length} messages matching search`);
-        
-        res.json({
-            messages,
-            total,
-            query
-        });
-        
-    } catch (error) {
-        console.error('❌ Search messages error:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
