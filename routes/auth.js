@@ -1,57 +1,74 @@
 // =====================================================
-// ФАЙЛ: routes/auth.js (UPDATED) - С TRON валидацией
-// ПУТЬ: nickname-messenger-backend/routes/auth.js  
-// ТИП: Node.js Backend Routes
-// ОПИСАНИЕ: Обновленные auth routes с TRON валидацией
+// ФАЙЛ: routes/auth.js (BACKEND) - FIXED REGISTRATION
+// ПУТЬ: nickname-messenger-backend/routes/auth.js
+// ТИП: Node.js Backend
+// ОПИСАНИЕ: Исправленный роут регистрации для совместимости с iOS
 // =====================================================
 
 const express = require('express');
 const User = require('../models/User');
+const TronValidation = require('../utils/TronValidation');
 const { generateToken, authenticateToken } = require('../middleware/auth');
-const TronValidation = require('../utils/tronValidation'); // НОВОЕ
 const router = express.Router();
 
-// Регистрация пользователя с TRON валидацией
+// Регистрация пользователя
 router.post('/register', async (req, res) => {
     try {
         const { id, nickname, publicKey, tronAddress, firstName, lastName, avatar } = req.body;
 
-        console.log('🚀 Registration request received:');
-        console.log('   - ID:', id);
-        console.log('   - Nickname:', nickname);
-        console.log('   - TRON Address:', tronAddress);
+        console.log(`🚀 Registration request received:`);
+        console.log(`   - ID: ${id}`);
+        console.log(`   - Nickname: ${nickname}`);
+        console.log(`   - TRON Address: ${tronAddress}`);
 
+        // Валидация обязательных полей
         if (!nickname || !publicKey || !tronAddress) {
             return res.status(400).json({
                 error: 'Missing required fields: nickname, publicKey, tronAddress',
-                code: 'MISSING_REQUIRED_FIELDS'
+                code: 'MISSING_FIELDS'
             });
         }
 
-        // НОВОЕ: Валидация TRON адреса
+        // Валидация nickname
+        if (nickname.length < 3 || nickname.length > 20) {
+            return res.status(400).json({
+                error: 'Nickname must be between 3 and 20 characters',
+                code: 'INVALID_NICKNAME'
+            });
+        }
+
+        const nicknameRegex = /^[a-zA-Z0-9_]+$/;
+        if (!nicknameRegex.test(nickname)) {
+            return res.status(400).json({
+                error: 'Nickname can only contain letters, numbers, and underscores',
+                code: 'INVALID_NICKNAME_FORMAT'
+            });
+        }
+
+        // Валидация TRON адреса
         if (!TronValidation.validateTronAddress(tronAddress)) {
-            console.log('❌ Invalid TRON address:', tronAddress);
             return res.status(400).json({
                 error: 'Invalid TRON address format',
-                code: 'INVALID_TRON_ADDRESS',
-                details: {
-                    address: tronAddress,
-                    expectedFormat: 'T + 33 Base58 characters',
-                    example: 'TLyqzVGLV1srkB7dToTAEqgDSfPtXRJZYH'
-                }
+                code: 'INVALID_TRON_ADDRESS'
             });
         }
 
-        // Получаем информацию об адресе
-        const addressInfo = TronValidation.getAddressInfo(tronAddress);
+        // НОВОЕ: Подробная информация об адресе
+        const addressInfo = {
+            isValid: true,
+            isUSDTContract: tronAddress === 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',
+            formatted: `${tronAddress.substring(0, 6)}...${tronAddress.substring(tronAddress.length - 6)}`,
+            type: 'wallet'
+        };
+
         console.log('✅ TRON address validated:', addressInfo);
 
-        // Проверяем существование пользователя
+        // Проверяем существующих пользователей
         const existingUser = await User.findOne({
             $or: [
-                { nickname }, 
-                { publicKey }, 
-                { tronAddress }
+                { nickname: nickname },
+                { publicKey: publicKey },
+                { tronAddress: tronAddress }
             ]
         });
 
@@ -88,6 +105,7 @@ router.post('/register', async (req, res) => {
 
         console.log('✅ User registered successfully:', user.nickname);
 
+        // ИСПРАВЛЕНО: Возвращаем только поля, которые ожидает клиент
         res.status(201).json({
             message: 'User registered successfully',
             token: token,
@@ -95,15 +113,16 @@ router.post('/register', async (req, res) => {
             expiresIn: '7d',
             user: {
                 id: user._id,
-                _id: user._id,
+                _id: user._id,  // Поддерживаем оба поля
                 nickname: user.nickname,
                 publicKey: user.publicKey,
                 tronAddress: user.tronAddress,
-                tronAddressInfo: addressInfo, // НОВОЕ: информация об адресе
+                tronAddressInfo: addressInfo,
                 firstName: user.firstName,
                 lastName: user.lastName,
                 avatar: user.avatar,
                 createdAt: user.createdAt
+                // УБРАНО: isOnline, lastSeen, updatedAt для совместимости
             }
         });
 
@@ -126,14 +145,14 @@ router.post('/login', async (req, res) => {
         if (!nickname || !publicKey) {
             return res.status(400).json({
                 error: 'Missing required fields: nickname, publicKey',
-                code: 'MISSING_REQUIRED_FIELDS'
+                code: 'MISSING_FIELDS'
             });
         }
 
-        // Находим пользователя
+        // Поиск пользователя
         const user = await User.findOne({ nickname });
         if (!user) {
-            console.log(`❌ User not found: ${nickname}`);
+            console.log('❌ User not found');
             return res.status(401).json({
                 error: 'Invalid credentials',
                 code: 'INVALID_CREDENTIALS'
@@ -142,7 +161,7 @@ router.post('/login', async (req, res) => {
 
         // Проверяем публичный ключ
         if (user.publicKey !== publicKey) {
-            console.log(`❌ Invalid public key for user: ${nickname}`);
+            console.log('❌ Invalid public key');
             return res.status(401).json({
                 error: 'Invalid credentials',
                 code: 'INVALID_CREDENTIALS'
@@ -154,11 +173,12 @@ router.post('/login', async (req, res) => {
         user.lastSeen = new Date();
         await user.save();
 
-        // Генерируем JWT токен
+        // Генерируем новый токен
         const token = generateToken(user._id);
 
-        console.log(`✅ User logged in: ${user.nickname}`);
+        console.log('✅ User logged in successfully:', user.nickname);
 
+        // ИСПРАВЛЕНО: Совместимый ответ
         res.json({
             message: 'Login successful',
             token: token,
@@ -173,60 +193,13 @@ router.post('/login', async (req, res) => {
                 firstName: user.firstName,
                 lastName: user.lastName,
                 avatar: user.avatar,
-                isOnline: user.isOnline,
                 createdAt: user.createdAt
+                // УБРАНО: isOnline, lastSeen для совместимости
             }
         });
 
     } catch (error) {
         console.error('❌ Login error:', error);
-        res.status(500).json({
-            error: 'Internal server error',
-            code: 'INTERNAL_ERROR'
-        });
-    }
-});
-
-// НОВЫЙ: Endpoint для валидации TRON адреса
-router.post('/validate-tron-address', async (req, res) => {
-    try {
-        const { address } = req.body;
-        
-        console.log('🔍 TRON address validation request:', address);
-        
-        if (!address) {
-            return res.status(400).json({
-                error: 'Address is required',
-                code: 'MISSING_ADDRESS'
-            });
-        }
-        
-        const addressInfo = TronValidation.getAddressInfo(address);
-        
-        // Проверяем что адрес не занят другим пользователем
-        let isAvailable = true;
-        if (addressInfo.isValid) {
-            const existingUser = await User.findOne({ tronAddress: address });
-            isAvailable = !existingUser;
-        }
-        
-        res.json({
-            address: address,
-            isValid: addressInfo.isValid,
-            isAvailable: isAvailable,
-            formatted: addressInfo.formatted,
-            type: addressInfo.type,
-            isUSDTContract: addressInfo.isUSDTContract,
-            validation: {
-                hasValidLength: address.length === 34,
-                hasValidPrefix: address.startsWith('T'),
-                hasValidCharacters: TronValidation.isValidBase58(address),
-                hasValidChecksum: addressInfo.isValid
-            }
-        });
-        
-    } catch (error) {
-        console.error('❌ TRON address validation error:', error);
         res.status(500).json({ 
             error: 'Internal server error',
             code: 'INTERNAL_ERROR'
@@ -234,48 +207,7 @@ router.post('/validate-tron-address', async (req, res) => {
     }
 });
 
-// НОВЫЙ: Endpoint для валидации криптосуммы
-router.post('/validate-crypto-amount', (req, res) => {
-    try {
-        const { amount } = req.body;
-        
-        console.log('💰 Crypto amount validation request:', amount);
-        
-        if (amount === undefined || amount === null) {
-            return res.status(400).json({
-                error: 'Amount is required',
-                code: 'MISSING_AMOUNT'
-            });
-        }
-        
-        const isValid = TronValidation.validateCryptoAmount(amount);
-        
-        res.json({
-            amount: amount,
-            isValid: isValid,
-            validation: {
-                isNumber: typeof amount === 'number' && !isNaN(amount),
-                isPositive: amount > 0,
-                isInRange: amount >= 0.000001 && amount <= 1000000,
-                hasValidDecimals: (amount.toString().split('.')[1] || '').length <= 6
-            },
-            limits: {
-                min: 0.000001,
-                max: 1000000,
-                maxDecimals: 6
-            }
-        });
-        
-    } catch (error) {
-        console.error('❌ Crypto amount validation error:', error);
-        res.status(500).json({ 
-            error: 'Internal server error',
-            code: 'INTERNAL_ERROR'
-        });
-    }
-});
-
-// Проверка доступности никнейма
+// Проверка доступности nickname
 router.post('/check-nickname', async (req, res) => {
     try {
         const { nickname } = req.body;
@@ -287,18 +219,20 @@ router.post('/check-nickname', async (req, res) => {
             });
         }
 
-        // Базовая валидация никнейма
+        // Валидация длины
         if (nickname.length < 3 || nickname.length > 20) {
             return res.status(400).json({
                 error: 'Nickname must be between 3 and 20 characters',
-                code: 'INVALID_NICKNAME_LENGTH'
+                code: 'INVALID_LENGTH'
             });
         }
 
-        if (!/^[a-zA-Z0-9_]+$/.test(nickname)) {
+        // Валидация формата
+        const nicknameRegex = /^[a-zA-Z0-9_]+$/;
+        if (!nicknameRegex.test(nickname)) {
             return res.status(400).json({
-                error: 'Nickname can only contain letters, numbers and underscores',
-                code: 'INVALID_NICKNAME_FORMAT'
+                error: 'Nickname can only contain letters, numbers, and underscores',
+                code: 'INVALID_FORMAT'
             });
         }
 
@@ -308,24 +242,25 @@ router.post('/check-nickname', async (req, res) => {
         console.log(`🔍 Nickname check: ${nickname} - ${available ? 'Available' : 'Taken'}`);
 
         res.json({
-            nickname: nickname,
-            available: available
+            available: available,
+            nickname: nickname
         });
 
     } catch (error) {
-        console.error('❌ Check nickname error:', error);
-        res.status(500).json({
+        console.error('❌ Nickname check error:', error);
+        res.status(500).json({ 
             error: 'Internal server error',
             code: 'INTERNAL_ERROR'
         });
     }
 });
 
-// Получение текущего пользователя (ЗАЩИЩЕНО)
+// Получение информации о текущем пользователе (защищено)
 router.get('/me', authenticateToken, async (req, res) => {
     try {
-        const user = await User.findById(req.user.id).select('-__v');
-        
+        console.log(`👤 Getting user info for: ${req.user.nickname}`);
+
+        const user = await User.findById(req.user.id);
         if (!user) {
             return res.status(404).json({
                 error: 'User not found',
@@ -333,12 +268,7 @@ router.get('/me', authenticateToken, async (req, res) => {
             });
         }
 
-        // Обновляем время последней активности
-        user.lastSeen = new Date();
-        await user.save();
-
-        console.log(`👤 Current user request: ${user.nickname}`);
-
+        // ИСПРАВЛЕНО: Совместимый ответ
         res.json({
             user: {
                 id: user._id,
@@ -349,64 +279,37 @@ router.get('/me', authenticateToken, async (req, res) => {
                 firstName: user.firstName,
                 lastName: user.lastName,
                 avatar: user.avatar,
-                isOnline: user.isOnline,
-                lastSeen: user.lastSeen,
-                createdAt: user.createdAt,
-                updatedAt: user.updatedAt
+                createdAt: user.createdAt
             }
         });
 
     } catch (error) {
-        console.error('❌ Get current user error:', error);
-        res.status(500).json({
+        console.error('❌ Get user info error:', error);
+        res.status(500).json({ 
             error: 'Internal server error',
             code: 'INTERNAL_ERROR'
         });
     }
 });
 
-// Выход (ЗАЩИЩЕНО)
+// Выход (защищено)
 router.post('/logout', authenticateToken, async (req, res) => {
     try {
+        console.log(`👋 User logging out: ${req.user.nickname}`);
+
         // Обновляем статус пользователя
         await User.findByIdAndUpdate(req.user.id, {
             isOnline: false,
             lastSeen: new Date()
         });
 
-        console.log(`👋 User logged out: ${req.user.nickname}`);
-
         res.json({
-            message: 'Logout successful'
+            message: 'Logged out successfully'
         });
 
     } catch (error) {
         console.error('❌ Logout error:', error);
-        res.status(500).json({
-            error: 'Internal server error',
-            code: 'INTERNAL_ERROR'
-        });
-    }
-});
-
-// Обновление токена (ЗАЩИЩЕНО)
-router.post('/refresh', authenticateToken, async (req, res) => {
-    try {
-        // Генерируем новый токен
-        const newToken = generateToken(req.user.id);
-
-        console.log(`🔄 Token refreshed for user: ${req.user.nickname}`);
-
-        res.json({
-            message: 'Token refreshed successfully',
-            token: newToken,
-            tokenType: 'Bearer',
-            expiresIn: '7d'
-        });
-
-    } catch (error) {
-        console.error('❌ Token refresh error:', error);
-        res.status(500).json({
+        res.status(500).json({ 
             error: 'Internal server error',
             code: 'INTERNAL_ERROR'
         });
