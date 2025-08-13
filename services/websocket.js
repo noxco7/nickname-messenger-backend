@@ -88,7 +88,8 @@ class WebSocketService {
 
                     // Проверяем права доступа к чату
                     const chat = await Chat.findById(chatId);
-                    if (!chat || !chat.participants.includes(socket.userData.id)) {
+                    // ИСПРАВЛЕНО: Приводим ID к строке для корректного сравнения
+                    if (!chat || !chat.participants.includes(String(socket.userData.id))) {
                         socket.emit('error', { message: 'Access denied to chat' });
                         return;
                     }
@@ -139,7 +140,8 @@ class WebSocketService {
 
                     // Проверяем доступ к чату
                     const chat = await Chat.findById(messageData.chatId);
-                    if (!chat || !chat.participants.includes(socket.userData.id)) {
+                    // ИСПРАВЛЕНО: Приводим ID к строке для корректного сравнения
+                    if (!chat || !chat.participants.includes(String(socket.userData.id))) {
                         socket.emit('messageError', { error: 'Access denied to chat' });
                         return;
                     }
@@ -235,7 +237,8 @@ class WebSocketService {
 
                     // Проверяем доступ к чату
                     const chat = await Chat.findById(chatId);
-                    if (!chat || !chat.participants.includes(socket.userData.id)) {
+                    // ИСПРАВЛЕНО: Приводим ID к строке для корректного сравнения
+                    if (!chat || !chat.participants.includes(String(socket.userData.id))) {
                         return;
                     }
 
