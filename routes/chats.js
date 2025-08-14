@@ -1,8 +1,8 @@
 // =====================================================
-// ФАЙЛ: routes/chats.js (BACKEND) - ПОЛНАЯ ИСПРАВЛЕННАЯ ВЕРСИЯ
+// ФАЙЛ: routes/chats.js (BACKEND) - ПОЛНОСТЬЮ ИСПРАВЛЕННАЯ ВЕРСИЯ
 // ПУТЬ: nickname-messenger-backend/routes/chats.js
 // ТИП: Node.js Backend
-// ОПИСАНИЕ: Исправленные чаты роуты с правильным возвратом lastMessage как String ID
+// ОПИСАНИЕ: Исправленные чаты роуты с корректной проверкой участников
 // =====================================================
 
 const express = require('express');
@@ -43,7 +43,7 @@ function formatChatResponse(chat) {
     return {
         _id: chat._id.toString(),
         participants: chat.participants,
-        lastMessage: chat.lastMessage ? chat.lastMessage.toString() : null, // ТОЛЬКО ID как String
+        lastMessage: chat.lastMessage ? chat.lastMessage.toString() : null,
         lastMessageAt: chat.lastMessageAt,
         chatType: chat.chatType,
         isActive: chat.isActive,
@@ -67,7 +67,7 @@ router.post('/create', authenticateToken, async (req, res) => {
             return res.status(400).json({ error: 'Требуется ровно 2 участника' });
         }
         
-        // ИСПРАВЛЕНО: Нормализуем все UUID к uppercase
+        // Нормализуем все UUID к uppercase
         const normalizedParticipants = normalizeUUIDs(participants);
         const normalizedCurrentUserId = normalizeUUID(currentUserId);
         
@@ -83,39 +83,46 @@ router.post('/create', authenticateToken, async (req, res) => {
             return res.status(403).json({ error: 'Вы должны быть участником чата' });
         }
         
-        // Сортируем участников для консистентного поиска
-        const sortedParticipants = [...normalizedParticipants].sort();
+        // ИСПРАВЛЕНО: НЕ СОРТИРУЕМ участников, а ищем чат с точным совпадением участников
+        console.log('🔍 Ищем существующий чат с участниками:', normalizedParticipants);
         
-        console.log('🔍 Ищем существующий чат с отсортированными участниками:', sortedParticipants);
-        
-        // ИСПРАВЛЕНО: НЕ популяризируем lastMessage при поиске
+        // Ищем чат где есть ОБА участника в любом порядке
         const existingChat = await Chat.findOne({
-            participants: { $all: sortedParticipants },
-            participants: { $size: 2 }
+            $and: [
+                { participants: { $all: normalizedParticipants } },
+                { participants: { $size: 2 } },
+                { chatType: 'direct' }
+            ]
         });
         
         if (existingChat) {
             console.log('✅ Найден существующий чат:', existingChat._id);
             console.log('   - Участники существующего чата:', existingChat.participants);
             
-            // ИСПРАВЛЕНО: Возвращаем lastMessage как String ID
+            // Активируем чат если он был деактивирован
+            if (!existingChat.isActive) {
+                existingChat.isActive = true;
+                await existingChat.save();
+                console.log('   - Чат был реактивирован');
+            }
+            
             return res.json(formatChatResponse(existingChat));
         }
         
-        // Создаем новый чат с нормализованными и отсортированными участниками
-        console.log('💬 Создаем новый чат с участниками:', sortedParticipants);
+        // Создаем новый чат БЕЗ сортировки участников
+        console.log('💬 Создаем новый чат с участниками:', normalizedParticipants);
         
         const chat = new Chat({ 
-            participants: sortedParticipants,
+            participants: normalizedParticipants, // Сохраняем порядок как есть
             chatType: 'direct',
-            isActive: true
+            isActive: true,
+            lastMessageAt: new Date()
         });
         
         await chat.save();
         console.log('✅ Чат успешно создан:', chat._id);
         console.log('   - Сохраненные участники:', chat.participants);
         
-        // ИСПРАВЛЕНО: Возвращаем lastMessage как String ID
         res.status(201).json(formatChatResponse(chat));
         
     } catch (error) {
@@ -145,7 +152,6 @@ router.get('/user/:userId', authenticateToken, async (req, res) => {
             return res.status(403).json({ error: 'Доступ запрещен. Вы можете просматривать только свои чаты' });
         }
         
-        // ИСПРАВЛЕНО: НЕ популяризируем lastMessage
         const chats = await Chat.find({ 
             participants: normalizedUserId,
             isActive: true 
@@ -156,7 +162,6 @@ router.get('/user/:userId', authenticateToken, async (req, res) => {
         
         console.log(`✅ Найдено ${chats.length} чатов для пользователя ${req.user.nickname}`);
         
-        // ИСПРАВЛЕНО: Форматируем с lastMessage как String ID
         const formattedChats = chats.map(formatChatResponse);
         
         res.json(formattedChats);
@@ -179,7 +184,6 @@ router.get('/my', authenticateToken, async (req, res) => {
         console.log('💬 Получаем чаты для аутентифицированного пользователя:', req.user.nickname);
         console.log('   - Normalized user ID:', normalizedCurrentUserId);
         
-        // ИСПРАВЛЕНО: НЕ популяризируем lastMessage
         const chats = await Chat.find({ 
             participants: normalizedCurrentUserId,
             isActive: true 
@@ -190,7 +194,6 @@ router.get('/my', authenticateToken, async (req, res) => {
         
         console.log(`✅ Найдено ${chats.length} чатов для пользователя ${req.user.nickname}`);
         
-        // ИСПРАВЛЕНО: Форматируем с lastMessage как String ID
         const formattedChats = chats.map(formatChatResponse);
         
         res.json(formattedChats);
@@ -217,7 +220,7 @@ router.get('/my/with-messages', authenticateToken, async (req, res) => {
             participants: normalizedCurrentUserId,
             isActive: true 
         })
-        .populate('lastMessage') // Популяризируем для полной информации
+        .populate('lastMessage')
         .sort({ lastMessageAt: -1 })
         .limit(limit)
         .skip(offset);
@@ -228,7 +231,7 @@ router.get('/my/with-messages', authenticateToken, async (req, res) => {
         const formattedChats = chats.map(chat => ({
             _id: chat._id.toString(),
             participants: chat.participants,
-            lastMessage: chat.lastMessage, // ПОЛНЫЙ объект Message
+            lastMessage: chat.lastMessage,
             lastMessageAt: chat.lastMessageAt,
             chatType: chat.chatType,
             isActive: chat.isActive,
@@ -251,7 +254,6 @@ router.get('/:chatId', authenticateToken, async (req, res) => {
         
         console.log(`💬 Получаем чат ${chatId} для пользователя: ${req.user.nickname}`);
         
-        // ИСПРАВЛЕНО: НЕ популяризируем lastMessage
         const chat = await Chat.findById(chatId);
         
         if (!chat) {
@@ -259,7 +261,6 @@ router.get('/:chatId', authenticateToken, async (req, res) => {
             return res.status(404).json({ error: 'Chat not found' });
         }
         
-        // ИСПРАВЛЕНО: Используем функцию проверки доступа с нормализацией
         if (!checkChatAccess(chat, req.user.id)) {
             console.log('❌ Пользователь не является участником этого чата');
             return res.status(403).json({ error: 'Доступ запрещен. Вы не являетесь участником этого чата' });
@@ -267,7 +268,6 @@ router.get('/:chatId', authenticateToken, async (req, res) => {
         
         console.log(`✅ Чат найден, и пользователь является его участником`);
         
-        // ИСПРАВЛЕНО: Форматируем с lastMessage как String ID
         res.json(formatChatResponse(chat));
         
     } catch (error) {
@@ -283,7 +283,6 @@ router.get('/:chatId/with-message', authenticateToken, async (req, res) => {
         
         console.log(`💬 Получаем чат ${chatId} с полным сообщением для пользователя: ${req.user.nickname}`);
         
-        // ЗДЕСЬ популяризируем lastMessage
         const chat = await Chat.findById(chatId).populate('lastMessage');
         
         if (!chat) {
@@ -298,11 +297,10 @@ router.get('/:chatId/with-message', authenticateToken, async (req, res) => {
         
         console.log(`✅ Чат найден с полной информацией о сообщении`);
         
-        // Возвращаем с полным объектом lastMessage
         res.json({
             _id: chat._id.toString(),
             participants: chat.participants,
-            lastMessage: chat.lastMessage, // ПОЛНЫЙ объект Message
+            lastMessage: chat.lastMessage,
             lastMessageAt: chat.lastMessageAt,
             chatType: chat.chatType,
             isActive: chat.isActive,
@@ -331,13 +329,11 @@ router.put('/:chatId', authenticateToken, async (req, res) => {
             return res.status(404).json({ error: 'Chat not found' });
         }
         
-        // Проверяем что пользователь является участником чата
         if (!checkChatAccess(chat, req.user.id)) {
             console.log('❌ Пользователь не является участником этого чата');
             return res.status(403).json({ error: 'Доступ запрещен. Вы не являетесь участником этого чата' });
         }
         
-        // Обновляем разрешенные поля
         if (isActive !== undefined) {
             chat.isActive = isActive;
         }
@@ -371,7 +367,6 @@ router.delete('/:chatId', authenticateToken, async (req, res) => {
             return res.status(404).json({ error: 'Chat not found' });
         }
         
-        // Проверяем что пользователь является участником чата
         if (!checkChatAccess(chat, req.user.id)) {
             console.log('❌ Пользователь не является участником этого чата');
             return res.status(403).json({ error: 'Доступ запрещен. Вы не являетесь участником этого чата' });
@@ -408,13 +403,12 @@ router.get('/:chatId/participants', authenticateToken, async (req, res) => {
             return res.status(404).json({ error: 'Chat not found' });
         }
         
-        // Проверяем что пользователь является участником чата
         if (!checkChatAccess(chat, req.user.id)) {
             console.log('❌ Пользователь не является участником этого чата');
             return res.status(403).json({ error: 'Доступ запрещен. Вы не являетесь участником этого чата' });
         }
         
-        // Получаем информацию об участниках (без приватных данных)
+        // Получаем информацию об участниках
         const User = require('../models/User');
         const participants = await User.find({
             _id: { $in: chat.participants }
@@ -458,7 +452,6 @@ router.post('/:chatId/leave', authenticateToken, async (req, res) => {
             return res.status(404).json({ error: 'Chat not found' });
         }
         
-        // Проверяем что пользователь является участником чата
         if (!checkChatAccess(chat, req.user.id)) {
             console.log('❌ Пользователь не является участником этого чата');
             return res.status(403).json({ error: 'Вы не являетесь участником этого чата' });
@@ -518,7 +511,6 @@ router.get('/:chatId/stats', authenticateToken, async (req, res) => {
             return res.status(404).json({ error: 'Chat not found' });
         }
         
-        // Проверяем что пользователь является участником чата
         if (!checkChatAccess(chat, req.user.id)) {
             console.log('❌ Пользователь не является участником этого чата');
             return res.status(403).json({ error: 'Доступ запрещен. Вы не являетесь участником этого чата' });
