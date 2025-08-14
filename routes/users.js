@@ -33,6 +33,31 @@ router.get('/nickname/:nickname', async (req, res) => {
     }
 });
 
+
+
+// Get user by ID (ЗАЩИЩЕНО - требует аутентификации)
+router.get('/id/:id', authenticateToken, async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        console.log(`👤 Looking for user with ID: ${id}`);
+        
+        const user = await User.findById(id).select('-__v');
+        
+        if (!user) {
+            console.log(`❌ User not found by ID: ${id}`);
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        console.log(`✅ User found by ID: ${user.nickname}`);
+        res.json(user);
+        
+    } catch (error) {
+        console.error('Get user by ID error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
 // Get user by TRON address (БЕЗ аутентификации - для восстановления аккаунта)
 router.get('/address/:address', async (req, res) => {
     try {
