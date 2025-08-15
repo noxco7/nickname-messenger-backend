@@ -1,8 +1,7 @@
 // =====================================================
-// ФАЙЛ: models/Message.js (BACKEND) - COMPLETE VERSION
+// ФАЙЛ: models/Message.js (BACKEND) - ИСПРАВЛЕННАЯ ВЕРСИЯ
 // ПУТЬ: nickname-messenger-backend/models/Message.js
-// ТИП: Node.js Backend
-// ОПИСАНИЕ: Полная модель сообщений с E2E шифрованием
+// ОПИСАНИЕ: Полная модель сообщений с корректной ссылкой на User
 // =====================================================
 
 const mongoose = require('mongoose');
@@ -66,21 +65,19 @@ const MessageSchema = new mongoose.Schema({
     },
     senderId: {
         type: String, // UUID
-        ref: 'User',  // <--- ДОБАВЬТЕ ЭТУ СТРОКУ
+        ref: 'User',  // <--- ВАЖНОЕ ИСПРАВЛЕНИЕ
         required: true
     },
     content: {
         type: String,
         required: true,
-        maxlength: 10000 // Увеличено для зашифрованного контента
+        maxlength: 10000
     },
     messageType: {
         type: String,
         enum: ['text', 'crypto', 'system', 'encrypted'],
         default: 'text'
     },
-    
-    // НОВОЕ: E2E Encryption support
     isEncrypted: {
         type: Boolean,
         default: false
@@ -89,8 +86,6 @@ const MessageSchema = new mongoose.Schema({
         type: EncryptionDataSchema,
         default: null
     },
-    
-    // Crypto payment fields
     cryptoAmount: {
         type: Number,
         min: 0
@@ -102,8 +97,6 @@ const MessageSchema = new mongoose.Schema({
         type: String,
         enum: ['pending', 'confirmed', 'failed']
     },
-    
-    // Message status and delivery
     deliveryStatus: {
         type: String,
         enum: ['sending', 'delivered', 'failed', 'read'],
@@ -116,15 +109,13 @@ const MessageSchema = new mongoose.Schema({
     collection: 'messages'
 });
 
-// НОВОЕ: Валидация зашифрованных сообщений
+// Валидация зашифрованных сообщений
 MessageSchema.pre('save', function(next) {
-    // Если сообщение зашифровано, проверяем наличие данных шифрования
     if (this.isEncrypted && this.messageType === 'encrypted') {
         if (!this.encryptionData) {
             return next(new Error('Encryption data is required for encrypted messages'));
         }
         
-        // Проверяем обязательные поля шифрования
         const requiredFields = ['algorithm', 'keyDerivation', 'iv', 'authTag', 'salt', 'senderPublicKey', 'fingerprint'];
         for (const field of requiredFields) {
             if (!this.encryptionData[field]) {
@@ -133,7 +124,6 @@ MessageSchema.pre('save', function(next) {
         }
     }
     
-    // Если не зашифровано, убираем данные шифрования
     if (!this.isEncrypted) {
         this.encryptionData = null;
     }
@@ -141,9 +131,8 @@ MessageSchema.pre('save', function(next) {
     next();
 });
 
-// НОВОЕ: Метод для добавления отметки о прочтении
+// Метод для добавления отметки о прочтении
 MessageSchema.methods.markAsRead = function(userId) {
-    // Проверяем, не отмечено ли уже как прочитанное этим пользователем
     const existingReceipt = this.readReceipts.find(receipt => receipt.userId === userId);
     
     if (!existingReceipt) {
@@ -152,7 +141,6 @@ MessageSchema.methods.markAsRead = function(userId) {
             readAt: new Date()
         });
         
-        // Обновляем общий статус доставки если это отправитель
         if (this.senderId === userId) {
             this.deliveryStatus = 'read';
         }
@@ -161,36 +149,12 @@ MessageSchema.methods.markAsRead = function(userId) {
     return this;
 };
 
-// НОВОЕ: Метод для проверки, прочитано ли сообщение пользователем
+// Метод для проверки, прочитано ли сообщение пользователем
 MessageSchema.methods.isReadBy = function(userId) {
     return this.readReceipts.some(receipt => receipt.userId === userId);
 };
 
-// НОВОЕ: Метод для получения информации о шифровании
-MessageSchema.methods.getEncryptionInfo = function() {
-    if (!this.isEncrypted || !this.encryptionData) {
-        return null;
-    }
-    
-    return {
-        algorithm: this.encryptionData.algorithm,
-        version: this.encryptionData.version,
-        fingerprint: this.encryptionData.fingerprint,
-        isEncrypted: true
-    };
-};
-
-// НОВОЕ: Статический метод для создания зашифрованного сообщения
-MessageSchema.statics.createEncrypted = function(messageData, encryptionData) {
-    return new this({
-        ...messageData,
-        messageType: 'encrypted',
-        isEncrypted: true,
-        encryptionData: encryptionData
-    });
-};
-
-// НОВОЕ: Виртуальное поле для отображаемого контента
+// Виртуальное поле для отображаемого контента
 MessageSchema.virtual('displayContent').get(function() {
     if (this.isEncrypted && this.messageType === 'encrypted') {
         return '🔐 Encrypted message';
@@ -201,10 +165,7 @@ MessageSchema.virtual('displayContent').get(function() {
         case 'encrypted':
             return this.content;
         case 'crypto':
-            if (this.cryptoAmount) {
-                return `💰 Sent ${this.cryptoAmount.toFixed(6)} USDT`;
-            }
-            return '💰 Crypto transaction';
+            return this.cryptoAmount ? `💰 Sent ${this.cryptoAmount.toFixed(6)} USDT` : '💰 Crypto transaction';
         case 'system':
             return this.content;
         default:
@@ -212,33 +173,12 @@ MessageSchema.virtual('displayContent').get(function() {
     }
 });
 
-// Индексы для быстрого поиска
+// Индексы
 MessageSchema.index({ chatId: 1, createdAt: -1 });
 MessageSchema.index({ senderId: 1 });
-MessageSchema.index({ messageType: 1 });
-MessageSchema.index({ isEncrypted: 1 });
-MessageSchema.index({ deliveryStatus: 1 });
-
-// НОВОЕ: Индекс для зашифрованных сообщений
-MessageSchema.index({ 
-    chatId: 1, 
-    isEncrypted: 1, 
-    'encryptionData.senderPublicKey': 1 
-});
 
 // Включаем виртуальные поля в JSON
-MessageSchema.set('toJSON', { 
-    virtuals: true,
-    transform: function(doc, ret) {
-        // Удаляем чувствительные данные из JSON ответа в определенных случаях
-        if (ret.isEncrypted && ret.encryptionData) {
-            // Оставляем все данные шифрования для клиента
-            // В продакшене можно добавить дополнительную логику безопасности
-        }
-        return ret;
-    }
-});
-
+MessageSchema.set('toJSON', { virtuals: true });
 MessageSchema.set('toObject', { virtuals: true });
 
 module.exports = mongoose.model('Message', MessageSchema);
