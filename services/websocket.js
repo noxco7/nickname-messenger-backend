@@ -1,14 +1,15 @@
 // =====================================================
-// ФАЙЛ: services/websocket.js (BACKEND) - ENHANCED VERSION
+// ФАЙЛ: services/websocket.js (BACKEND) - ИСПРАВЛЕННАЯ ВЕРСИЯ
 // ПУТЬ: nickname-messenger-backend/services/websocket.js
 // ТИП: Node.js Backend
-// ОПИСАНИЕ: Обновленный WebSocket сервис с E2E шифрованием
+// ОПИСАНИЕ: Исправлено дублирование сообщений в WebSocket
 // =====================================================
 
 const User = require('../models/User');
 const Message = require('../models/Message');
 const Chat = require('../models/Chat');
 const { verifyToken } = require('../middleware/auth');
+const { sendPushNotification } = require('./pushNotificationService');
 
 class WebSocketService {
     constructor(io) {
@@ -22,7 +23,7 @@ class WebSocketService {
         this.io.on('connection', (socket) => {
             console.log('🔗 Client connected:', socket.id);
 
-            // НОВОЕ: JWT аутентификация через WebSocket
+            // JWT аутентификация через WebSocket
             socket.on('authenticate', async (data) => {
                 try {
                     const { token } = data;
@@ -88,7 +89,6 @@ class WebSocketService {
 
                     // Проверяем права доступа к чату
                     const chat = await Chat.findById(chatId);
-                    // ИСПРАВЛЕНО: Приводим ID к строке для корректного сравнения
                     if (!chat || !chat.participants.includes(String(socket.userData.id))) {
                         socket.emit('error', { message: 'Access denied to chat' });
                         return;
@@ -126,7 +126,7 @@ class WebSocketService {
                 console.log(`📤 Socket ${socket.id} left chat ${chatId}`);
             });
 
-            // НОВОЕ: Отправка сообщения с поддержкой шифрования
+            // ИСПРАВЛЕНО: Отправка сообщения через WebSocket
             socket.on('sendMessage', async (messageData) => {
                 try {
                     if (!socket.userData) {
@@ -140,7 +140,6 @@ class WebSocketService {
 
                     // Проверяем доступ к чату
                     const chat = await Chat.findById(messageData.chatId);
-                    // ИСПРАВЛЕНО: Приводим ID к строке для корректного сравнения
                     if (!chat || !chat.participants.includes(String(socket.userData.id))) {
                         socket.emit('messageError', { error: 'Access denied to chat' });
                         return;
@@ -156,7 +155,7 @@ class WebSocketService {
                         deliveryStatus: 'delivered'
                     };
 
-                    // НОВОЕ: Добавляем данные шифрования если есть
+                    // Добавляем данные шифрования если есть
                     if (messageData.isEncrypted && messageData.encryptionData) {
                         messagePayload.encryptionData = messageData.encryptionData;
                         console.log('🔐 Message includes encryption data');
@@ -182,39 +181,47 @@ class WebSocketService {
                     // Популируем данные отправителя
                     await message.populate('senderId', 'nickname firstName lastName avatar');
 
-                    // НОВОЕ: Подготавливаем данные для отправки через WebSocket
-                    const webSocketMessage = {
-                        id: message._id,
-                        chatId: message.chatId,
-                        senderId: message.senderId._id || message.senderId,
-                        senderInfo: {
-                            nickname: socket.userData.nickname,
-                            firstName: message.senderId.firstName,
-                            lastName: message.senderId.lastName,
-                            avatar: message.senderId.avatar
-                        },
-                        content: message.content,
-                        messageType: message.messageType,
-                        timestamp: message.createdAt,
-                        isEncrypted: message.isEncrypted,
-                        encryptionData: message.encryptionData,
-                        deliveryStatus: message.deliveryStatus,
-                        cryptoAmount: message.cryptoAmount,
-                        transactionHash: message.transactionHash,
-                        transactionStatus: message.transactionStatus
-                    };
-
-                    // Отправляем сообщение всем участникам чата
-                    this.io.to(messageData.chatId).emit('message', webSocketMessage);
-
-                    // Отправляем подтверждение отправителю
+                    // ИСПРАВЛЕНИЕ: НЕ отправляем сообщение всем через emit,
+                    // так как это уже делается в HTTP endpoint /api/messages/send
+                    // Здесь только подтверждаем отправителю
+                    
                     socket.emit('messageSent', {
-                        tempId: messageData.tempId, // Временный ID для синхронизации клиента
+                        tempId: messageData.tempId,
                         messageId: message._id,
                         timestamp: message.createdAt
                     });
 
-                    console.log(`✅ ${message.isEncrypted ? 'Encrypted' : 'Plain'} message sent via WebSocket: ${message._id}`);
+                    console.log(`✅ Message saved via WebSocket: ${message._id}`);
+                    
+                    // Отправляем push-уведомление получателю
+                    const recipientId = chat.participants.find(p => String(p) !== String(socket.userData.id));
+                    if (recipientId) {
+                        const recipient = await User.findById(recipientId);
+                        if (recipient && recipient.deviceTokens && recipient.deviceTokens.length > 0) {
+                            const validTokens = recipient.deviceTokens.filter(token => 
+                                token && typeof token === 'string' && token.trim().length > 0
+                            );
+                            
+                            if (validTokens.length > 0) {
+                                const senderName = socket.userData.nickname;
+                                const notificationTitle = `New message from ${senderName}`;
+                                const notificationBody = messageData.isEncrypted ? 
+                                    '🔐 Encrypted message' : 
+                                    messageData.content.substring(0, 100);
+                                
+                                await sendPushNotification(
+                                    validTokens,
+                                    notificationTitle,
+                                    notificationBody,
+                                    { 
+                                        chatId: messageData.chatId,
+                                        messageId: message._id.toString(),
+                                        type: 'message'
+                                    }
+                                );
+                            }
+                        }
+                    }
 
                 } catch (error) {
                     console.error('❌ WebSocket send message error:', error);
@@ -226,7 +233,7 @@ class WebSocketService {
                 }
             });
 
-            // НОВОЕ: Отправка статуса прочтения
+            // Отправка статуса прочтения
             socket.on('sendReadReceipt', async (data) => {
                 try {
                     const { messageId, chatId } = data;
@@ -237,7 +244,6 @@ class WebSocketService {
 
                     // Проверяем доступ к чату
                     const chat = await Chat.findById(chatId);
-                    // ИСПРАВЛЕНО: Приводим ID к строке для корректного сравнения
                     if (!chat || !chat.participants.includes(String(socket.userData.id))) {
                         return;
                     }
@@ -308,7 +314,7 @@ class WebSocketService {
             });
         });
 
-        console.log('🚀 Enhanced WebSocket service with E2E encryption initialized');
+        console.log('🚀 WebSocket service initialized');
     }
 
     // Уведомление о статусе пользователя

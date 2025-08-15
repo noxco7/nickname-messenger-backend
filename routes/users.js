@@ -1,15 +1,15 @@
 // =====================================================
-// ФАЙЛ: routes/users.js (BACKEND) - ПОЛНАЯ ВЕРСИЯ
+// ФАЙЛ: routes/users.js (BACKEND) - ПОЛНАЯ ВЕРСИЯ С DEBUG
 // ПУТЬ: nickname-messenger-backend/routes/users.js  
-// ОПИСАНИЕ: Добавлен эндпоинт для регистрации токена устройства
+// ОПИСАНИЕ: Добавлен debug endpoint для проверки токенов
 // =====================================================
 
 const express = require('express');
 const User = require('../models/User');
 const { authenticateToken, optionalAuth } = require('../middleware/auth');
+const { sendTestNotification, validateDeviceToken } = require('../services/pushNotificationService');
 const router = express.Router();
 
-// ---> НАЧАЛО ИЗМЕНЕНИЙ
 // Регистрация токена устройства для push-уведомлений (ЗАЩИЩЕНО)
 router.post('/register-device', authenticateToken, async (req, res) => {
     try {
@@ -17,24 +17,135 @@ router.post('/register-device', authenticateToken, async (req, res) => {
         const userId = req.user.id;
 
         if (!deviceToken) {
-            return res.status(400).json({ error: 'deviceToken is required' });
+            return res.status(400).json({ 
+                error: 'deviceToken is required',
+                code: 'MISSING_TOKEN'
+            });
         }
 
         console.log(`📱 Регистрация токена устройства для пользователя ${req.user.nickname}`);
+        console.log(`   Токен: ${deviceToken.substring(0, 30)}...`);
+
+        // Валидируем токен перед сохранением
+        const isValid = await validateDeviceToken(deviceToken);
+        if (!isValid) {
+            console.log('❌ Токен невалидный, не сохраняем');
+            return res.status(400).json({ 
+                error: 'Invalid device token',
+                code: 'INVALID_TOKEN'
+            });
+        }
 
         // Добавляем токен к пользователю, избегая дубликатов
-        await User.findByIdAndUpdate(userId, {
-            $addToSet: { deviceTokens: deviceToken }
-        });
+        const result = await User.findByIdAndUpdate(
+            userId,
+            { $addToSet: { deviceTokens: deviceToken } },
+            { new: true }
+        );
 
-        res.json({ message: 'Device token registered successfully' });
+        console.log(`✅ Токен зарегистрирован. Всего токенов у пользователя: ${result.deviceTokens.length}`);
+
+        res.json({ 
+            message: 'Device token registered successfully',
+            tokenCount: result.deviceTokens.length
+        });
 
     } catch (error) {
         console.error('❌ Ошибка регистрации токена устройства:', error);
-        res.status(500).json({ error: 'Internal server error' });
+        res.status(500).json({ 
+            error: 'Internal server error',
+            code: 'INTERNAL_ERROR'
+        });
     }
 });
-// <--- КОНЕЦ ИЗМЕНЕНИЙ
+
+// DEBUG: Получить токены пользователя (ЗАЩИЩЕНО)
+router.get('/debug/tokens/:userId', authenticateToken, async (req, res) => {
+    try {
+        const { userId } = req.params;
+        
+        // Проверяем что это свой аккаунт или админ
+        if (req.user.id !== userId && req.user.nickname !== 'admin') {
+            return res.status(403).json({ 
+                error: 'Access denied',
+                code: 'ACCESS_DENIED'
+            });
+        }
+        
+        const user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({ 
+                error: 'User not found',
+                code: 'USER_NOT_FOUND'
+            });
+        }
+        
+        const tokens = user.deviceTokens || [];
+        const tokenInfo = [];
+        
+        // Проверяем каждый токен
+        for (const token of tokens) {
+            const isValid = await validateDeviceToken(token);
+            tokenInfo.push({
+                token: token.substring(0, 30) + '...',
+                isValid: isValid,
+                length: token.length
+            });
+        }
+        
+        res.json({
+            userId: user._id,
+            nickname: user.nickname,
+            tokenCount: tokens.length,
+            tokens: tokenInfo
+        });
+        
+    } catch (error) {
+        console.error('❌ Ошибка получения токенов:', error);
+        res.status(500).json({ 
+            error: error.message,
+            code: 'INTERNAL_ERROR'
+        });
+    }
+});
+
+// DEBUG: Отправить тестовое уведомление (ЗАЩИЩЕНО)
+router.post('/debug/test-notification', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        
+        const user = await User.findById(userId);
+        if (!user || !user.deviceTokens || user.deviceTokens.length === 0) {
+            return res.status(400).json({ 
+                error: 'No device tokens found',
+                code: 'NO_TOKENS'
+            });
+        }
+        
+        console.log(`📱 Отправка тестового уведомления для ${user.nickname}`);
+        
+        const results = [];
+        for (const token of user.deviceTokens) {
+            const success = await sendTestNotification(token);
+            results.push({
+                token: token.substring(0, 30) + '...',
+                success: success
+            });
+        }
+        
+        res.json({
+            message: 'Test notification sent',
+            results: results
+        });
+        
+    } catch (error) {
+        console.error('❌ Ошибка отправки тестового уведомления:', error);
+        res.status(500).json({ 
+            error: error.message,
+            code: 'INTERNAL_ERROR'
+        });
+    }
+});
 
 // Get user by nickname (БЕЗ аутентификации - публичная информация)
 router.get('/nickname/:nickname', async (req, res) => {
@@ -43,11 +154,14 @@ router.get('/nickname/:nickname', async (req, res) => {
         
         console.log(`👤 Looking for user with nickname: ${nickname}`);
         
-        const user = await User.findOne({ nickname }).select('-__v');
+        const user = await User.findOne({ nickname }).select('-__v -deviceTokens');
         
         if (!user) {
             console.log(`❌ User not found: ${nickname}`);
-            return res.status(404).json({ error: 'User not found' });
+            return res.status(404).json({ 
+                error: 'User not found',
+                code: 'USER_NOT_FOUND'
+            });
         }
         
         console.log(`✅ User found: ${user.nickname}`);
@@ -55,7 +169,10 @@ router.get('/nickname/:nickname', async (req, res) => {
         
     } catch (error) {
         console.error('Get user by nickname error:', error);
-        res.status(500).json({ error: 'Internal server error' });
+        res.status(500).json({ 
+            error: 'Internal server error',
+            code: 'INTERNAL_ERROR'
+        });
     }
 });
 
@@ -66,11 +183,14 @@ router.get('/id/:id', authenticateToken, async (req, res) => {
         
         console.log(`👤 Looking for user with ID: ${id}`);
         
-        const user = await User.findById(id).select('-__v');
+        const user = await User.findById(id).select('-__v -deviceTokens');
         
         if (!user) {
             console.log(`❌ User not found by ID: ${id}`);
-            return res.status(404).json({ error: 'User not found' });
+            return res.status(404).json({ 
+                error: 'User not found',
+                code: 'USER_NOT_FOUND'
+            });
         }
         
         console.log(`✅ User found by ID: ${user.nickname}`);
@@ -78,7 +198,10 @@ router.get('/id/:id', authenticateToken, async (req, res) => {
         
     } catch (error) {
         console.error('Get user by ID error:', error);
-        res.status(500).json({ error: 'Internal server error' });
+        res.status(500).json({ 
+            error: 'Internal server error',
+            code: 'INTERNAL_ERROR'
+        });
     }
 });
 
@@ -89,11 +212,14 @@ router.get('/address/:address', async (req, res) => {
         
         console.log(`🏠 Looking for user with address: ${address}`);
         
-        const user = await User.findOne({ tronAddress: address }).select('-__v');
+        const user = await User.findOne({ tronAddress: address }).select('-__v -deviceTokens');
         
         if (!user) {
             console.log(`❌ User not found by address: ${address}`);
-            return res.status(404).json({ error: 'User not found' });
+            return res.status(404).json({ 
+                error: 'User not found',
+                code: 'USER_NOT_FOUND'
+            });
         }
         
         console.log(`✅ User found by address: ${user.nickname}`);
@@ -101,7 +227,10 @@ router.get('/address/:address', async (req, res) => {
         
     } catch (error) {
         console.error('Get user by address error:', error);
-        res.status(500).json({ error: 'Internal server error' });
+        res.status(500).json({ 
+            error: 'Internal server error',
+            code: 'INTERNAL_ERROR'
+        });
     }
 });
 
@@ -165,7 +294,10 @@ router.get('/search', authenticateToken, async (req, res) => {
         
     } catch (error) {
         console.error('❌ Search users error:', error);
-        res.status(500).json({ error: 'Internal server error' });
+        res.status(500).json({ 
+            error: 'Internal server error',
+            code: 'INTERNAL_ERROR'
+        });
     }
 });
 
@@ -185,11 +317,16 @@ router.put('/profile', authenticateToken, async (req, res) => {
             req.user.id,
             updateData,
             { new: true, runValidators: true }
-        );
+        ).select('-deviceTokens -__v');
         
         if (!updatedUser) {
-            return res.status(404).json({ error: 'User not found' });
+            return res.status(404).json({ 
+                error: 'User not found',
+                code: 'USER_NOT_FOUND'
+            });
         }
+        
+        console.log(`✅ Profile updated for ${updatedUser.nickname}`);
         
         res.json({
             message: 'Profile updated successfully',
@@ -198,7 +335,10 @@ router.put('/profile', authenticateToken, async (req, res) => {
         
     } catch (error) {
         console.error('Update profile error:', error);
-        res.status(500).json({ error: 'Internal server error' });
+        res.status(500).json({ 
+            error: 'Internal server error',
+            code: 'INTERNAL_ERROR'
+        });
     }
 });
 
@@ -211,7 +351,10 @@ router.delete('/account', authenticateToken, async (req, res) => {
         
         const user = await User.findById(userId);
         if (!user) {
-            return res.status(404).json({ error: 'User not found' });
+            return res.status(404).json({ 
+                error: 'User not found',
+                code: 'USER_NOT_FOUND'
+            });
         }
         
         // Удаляем связанные данные
@@ -226,13 +369,17 @@ router.delete('/account', authenticateToken, async (req, res) => {
         
         console.log(`✅ Account and all related data deleted: ${user.nickname}`);
         
-        res.json({ message: 'Account deleted successfully' });
+        res.json({ 
+            message: 'Account deleted successfully' 
+        });
         
     } catch (error) {
         console.error('❌ Delete account error:', error);
-        res.status(500).json({ error: 'Internal server error' });
+        res.status(500).json({ 
+            error: 'Internal server error',
+            code: 'INTERNAL_ERROR'
+        });
     }
 });
-
 
 module.exports = router;
