@@ -1,7 +1,7 @@
 // =====================================================
 // ФАЙЛ: routes/messages.js (BACKEND) - ФИНАЛЬНАЯ ВЕРСИЯ
 // ПУТЬ: nickname-messenger-backend/routes/messages.js
-// ОПИСАНИЕ: Добавлена отправка push-уведомлений
+// ОПИСАНИЕ: Исправлена ошибка 'toString of undefined' и отправка push
 // =====================================================
 
 const express = require('express');
@@ -28,23 +28,40 @@ router.post('/send', authenticateToken, async (req, res) => {
         
         const senderId = req.user.id;
         
+        console.log(`📤 Отправка сообщения от ${req.user.nickname} в чат ${chatId}`);
+        console.log(`📤 Тип сообщения: ${messageType}, зашифровано: ${isEncrypted}`);
+        
         if (!chatId || !content) {
-            return res.status(400).json({ error: 'Missing required fields: chatId, content' });
+            return res.status(400).json({
+                error: 'Missing required fields: chatId, content'
+            });
         }
         
         const chat = await Chat.findById(chatId);
         if (!chat) {
+            console.log('❌ Чат не найден');
             return res.status(404).json({ error: 'Chat not found' });
         }
         
-        if (!chat.participants.map(p => String(p)).includes(String(senderId))) {
-            return res.status(403).json({ error: 'Access denied. You are not a participant of this chat' });
+        const userIdStr = String(senderId);
+        const participantStrs = chat.participants.map(p => String(p));
+        if (!participantStrs.includes(userIdStr)) {
+            console.log('❌ Пользователь не авторизован для отправки сообщения в этот чат');
+            return res.status(403).json({ 
+                error: 'Access denied. You are not a participant of this chat'
+            });
         }
         
         const messageData = { 
-            chatId, senderId, content, messageType,
-            isEncrypted, encryptionData: isEncrypted ? encryptionData : null,
-            cryptoAmount, transactionHash, transactionStatus
+            chatId, 
+            senderId, 
+            content, 
+            messageType,
+            isEncrypted,
+            encryptionData: isEncrypted ? encryptionData : null,
+            cryptoAmount,
+            transactionHash,
+            transactionStatus
         };
         
         const message = new Message(messageData);
@@ -55,23 +72,29 @@ router.post('/send', authenticateToken, async (req, res) => {
             lastMessageAt: new Date()
         });
         
+        // ---> ИСПРАВЛЕНИЕ ЗДЕСЬ
+        // Сначала "заполняем" (populate) данные отправителя
         await message.populate('senderId', 'nickname firstName lastName avatar');
         
         console.log(`✅ Сообщение ${message._id} сохранено в базу данных.`);
 
-        // Отправка WebSocket-события для обновления UI в реальном времени
+        // Теперь, когда senderId - это объект, отправляем WebSocket-событие
         const io = req.io;
         const webSocketMessage = {
-             _id: message._id, id: message._id, chatId: message.chatId.toString(),
-             senderId: message.senderId._id.toString(), content: message.content, 
-             messageType: message.messageType, timestamp: message.createdAt,
-             isEncrypted: message.isEncrypted, encryptionData: message.encryptionData,
+             _id: message._id, 
+             id: message._id, 
+             chatId: message.chatId.toString(),
+             senderId: message.senderId._id.toString(), // Теперь это работает
+             content: message.content, 
+             messageType: message.messageType, 
+             timestamp: message.createdAt,
+             isEncrypted: message.isEncrypted, 
+             encryptionData: message.encryptionData,
              senderInfo: { nickname: message.senderId.nickname }
         };
         io.to(chatId.toString()).emit('message', webSocketMessage);
-        console.log(`📡 Сообщение ${message._id} отправлено по WebSocket в комнату ${chatId}`);
+        console.log(`📡 Сообщение ${message._id} отправлено по WebSocket.`);
 
-        // ---> НАЧАЛО ИЗМЕНЕНИЙ
         // Отправка Push-уведомления
         const recipientId = chat.participants.find(p => String(p) !== String(senderId));
         if (recipientId) {
@@ -81,12 +104,10 @@ router.post('/send', authenticateToken, async (req, res) => {
                 const notificationTitle = `Новое сообщение от ${senderName}`;
                 const notificationBody = isEncrypted ? 'Сообщение зашифровано' : content;
                 const payload = { chatId: chatId.toString() };
-
                 await sendPushNotification(recipient.deviceTokens, notificationTitle, notificationBody, payload);
             }
         }
-        // <--- КОНЕЦ ИЗМЕНЕНИЙ
-
+        
         res.status(201).json(message);
 
     } catch (error) {
@@ -94,7 +115,6 @@ router.post('/send', authenticateToken, async (req, res) => {
         res.status(500).json({ error: 'Internal server error' });
     }
 });
-
 
 // Получение сообщений чата (ЗАЩИЩЕНО)
 router.get('/:chatId', authenticateToken, async (req, res) => {
@@ -112,7 +132,9 @@ router.get('/:chatId', authenticateToken, async (req, res) => {
         const participantStrs = chat.participants.map(p => String(p));
         
         if (!participantStrs.includes(userIdStr)) {
-            return res.status(403).json({ error: 'Access denied. You are not a participant of this chat' });
+            return res.status(403).json({ 
+                error: 'Access denied. You are not a participant of this chat'
+            });
         }
         
         const messages = await Message.find({ chatId })
