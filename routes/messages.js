@@ -9,7 +9,7 @@ const User = require('../models/User');
 const Message = require('../models/Message');
 const Chat = require('../models/Chat');
 const { verifyToken } = require('../middleware/auth');
-const { sendPushNotification } = require('./pushNotificationService');
+const { sendPushNotification } = require('../services/pushNotificationService');
 
 class WebSocketService {
     constructor(io) {
