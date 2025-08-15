@@ -1,402 +1,274 @@
 // =====================================================
-// ФАЙЛ: routes/messages.js (BACKEND) - ПОЛНОСТЬЮ ИСПРАВЛЕННАЯ ВЕРСИЯ
-// ПУТЬ: nickname-messenger-backend/routes/messages.js
-// ОПИСАНИЕ: Исправлено дублирование сообщений и улучшена отправка push
+// ФАЙЛ: services/websocket.js (BACKEND) - ИСПРАВЛЕННАЯ ВЕРСИЯ
+// ПУТЬ: nickname-messenger-backend/services/websocket.js
+// ТИП: Node.js Backend
+// ОПИСАНИЕ: Исправлено дублирование сообщений в WebSocket
 // =====================================================
 
-const express = require('express');
+const User = require('../models/User');
 const Message = require('../models/Message');
 const Chat = require('../models/Chat');
-const User = require('../models/User');
-const { authenticateToken } = require('../middleware/auth');
-const { sendPushNotification } = require('../services/pushNotificationService');
-const router = express.Router();
+const { verifyToken } = require('../middleware/auth');
+const { sendPushNotification } = require('./pushNotificationService');
 
-// Отправка сообщения (ЗАЩИЩЕНО)
-router.post('/send', authenticateToken, async (req, res) => {
-    try {
-        const {
-            chatId,
-            content,
-            messageType = 'text',
-            cryptoAmount,
-            transactionHash,
-            transactionStatus,
-            isEncrypted = false,
-            encryptionData
-        } = req.body;
-        
-        const senderId = req.user.id;
-        
-        console.log(`📤 Отправка сообщения от ${req.user.nickname} в чат ${chatId}`);
-        console.log(`   Тип: ${messageType}, Зашифровано: ${isEncrypted}`);
-        
-        // Валидация обязательных полей
-        if (!chatId || !content) {
-            return res.status(400).json({
-                error: 'Missing required fields: chatId, content',
-                code: 'MISSING_FIELDS'
-            });
-        }
-        
-        // Проверяем существование чата
-        const chat = await Chat.findById(chatId);
-        if (!chat) {
-            console.log('❌ Чат не найден');
-            return res.status(404).json({ 
-                error: 'Chat not found',
-                code: 'CHAT_NOT_FOUND'
-            });
-        }
-        
-        // Проверяем права доступа
-        const userIdStr = String(senderId);
-        const participantStrs = chat.participants.map(p => String(p));
-        if (!participantStrs.includes(userIdStr)) {
-            console.log('❌ Пользователь не является участником чата');
-            return res.status(403).json({ 
-                error: 'Access denied. You are not a participant of this chat',
-                code: 'ACCESS_DENIED'
-            });
-        }
-        
-        // Подготавливаем данные сообщения
-        const messageData = { 
-            chatId, 
-            senderId, 
-            content, 
-            messageType,
-            isEncrypted,
-            encryptionData: isEncrypted ? encryptionData : null,
-            cryptoAmount,
-            transactionHash,
-            transactionStatus,
-            deliveryStatus: 'delivered'
-        };
-        
-        // Создаем и сохраняем сообщение
-        const message = new Message(messageData);
-        await message.save();
-        
-        // Обновляем последнее сообщение в чате
-        await Chat.findByIdAndUpdate(chatId, {
-            lastMessage: message._id,
-            lastMessageAt: new Date()
-        });
-        
-        // Заполняем данные отправителя
-        await message.populate('senderId', 'nickname firstName lastName avatar publicKey tronAddress');
-        
-        console.log(`✅ Сообщение ${message._id} сохранено в базу данных`);
+class WebSocketService {
+    constructor(io) {
+        this.io = io;
+        this.connectedUsers = new Map(); // userId -> socketId
+        this.userSockets = new Map(); // socketId -> userData
+        this.chatRooms = new Map(); // chatId -> Set of socketIds
+    }
 
-        // Отправляем через WebSocket всем участникам чата
-        const io = req.io;
-        if (io) {
-            const webSocketMessage = {
-                _id: message._id,
-                id: message._id,
-                chatId: message.chatId.toString(),
-                senderId: message.senderId._id.toString(),
-                content: message.content,
-                messageType: message.messageType,
-                timestamp: message.createdAt,
-                isEncrypted: message.isEncrypted,
-                encryptionData: message.encryptionData,
-                deliveryStatus: message.deliveryStatus,
-                cryptoAmount: message.cryptoAmount,
-                transactionHash: message.transactionHash,
-                transactionStatus: message.transactionStatus,
-                senderInfo: {
-                    _id: message.senderId._id.toString(),
-                    id: message.senderId._id.toString(),
-                    nickname: message.senderId.nickname,
-                    firstName: message.senderId.firstName,
-                    lastName: message.senderId.lastName,
-                    avatar: message.senderId.avatar,
-                    publicKey: message.senderId.publicKey
-                }
-            };
-            
-            // Отправляем всем в комнате чата
-            io.to(chatId.toString()).emit('message', webSocketMessage);
-            console.log(`📡 Сообщение отправлено по WebSocket в комнату: ${chatId}`);
-        }
+    initialize() {
+        this.io.on('connection', (socket) => {
+            console.log('🔗 Client connected:', socket.id);
 
-        // Отправка Push-уведомления получателю
-        const recipientId = chat.participants.find(p => String(p) !== String(senderId));
-        if (recipientId) {
-            console.log(`🔍 Ищем получателя с ID: ${recipientId}`);
-            
-            const recipient = await User.findById(recipientId);
-            if (recipient) {
-                console.log(`👤 Найден получатель: ${recipient.nickname}`);
-                
-                if (recipient.deviceTokens && recipient.deviceTokens.length > 0) {
-                    // Фильтруем валидные токены
-                    const validTokens = recipient.deviceTokens.filter(token => 
-                        token && typeof token === 'string' && token.trim().length > 0
-                    );
+            // JWT аутентификация через WebSocket
+            socket.on('authenticate', async (data) => {
+                try {
+                    const { token } = data;
                     
-                    console.log(`📱 У получателя ${validTokens.length} валидных токенов`);
-                    
-                    if (validTokens.length > 0) {
-                        const senderName = message.senderId.nickname;
-                        const notificationTitle = `New message from ${senderName}`;
-                        const notificationBody = isEncrypted ? 
-                            '🔐 Encrypted message' : 
-                            (content.length > 100 ? content.substring(0, 97) + '...' : content);
-                        
-                        const payload = { 
-                            chatId: chatId.toString(),
-                            messageId: message._id.toString(),
-                            senderId: senderId.toString(),
-                            senderName: senderName,
-                            type: 'message'
-                        };
-                        
-                        // Отправляем push-уведомление
-                        const result = await sendPushNotification(
-                            validTokens,
-                            notificationTitle,
-                            notificationBody,
-                            payload
-                        );
-                        
-                        if (result) {
-                            console.log(`📊 Push результат: ${result.successCount} успешно, ${result.failureCount} неудачно`);
-                        }
-                    } else {
-                        console.log(`⚠️ У получателя ${recipient.nickname} нет валидных токенов`);
+                    if (!token) {
+                        socket.emit('authenticated', { 
+                            success: false, 
+                            error: 'No token provided' 
+                        });
+                        return;
                     }
-                } else {
-                    console.log(`⚠️ У получателя ${recipient.nickname} нет токенов устройств`);
+
+                    // Проверяем JWT токен
+                    const userData = await verifyToken(token);
+                    
+                    if (userData) {
+                        // Сохраняем пользователя
+                        this.connectedUsers.set(userData.id, socket.id);
+                        this.userSockets.set(socket.id, userData);
+                        
+                        // Обновляем статус пользователя
+                        await User.findByIdAndUpdate(userData.id, {
+                            isOnline: true,
+                            lastSeen: new Date()
+                        });
+                        
+                        socket.userId = userData.id;
+                        socket.userData = userData;
+                        
+                        socket.emit('authenticated', { 
+                            success: true, 
+                            userId: userData.id,
+                            nickname: userData.nickname
+                        });
+                        
+                        this.broadcastUserStatus(userData.id, true);
+                        
+                        console.log(`✅ User ${userData.nickname} authenticated via JWT`);
+                    } else {
+                        socket.emit('authenticated', { 
+                            success: false, 
+                            error: 'Invalid token' 
+                        });
+                    }
+                } catch (error) {
+                    console.error('❌ WebSocket authentication error:', error);
+                    socket.emit('authenticated', { 
+                        success: false, 
+                        error: 'Authentication failed' 
+                    });
                 }
-            } else {
-                console.log(`❌ Получатель с ID ${recipientId} не найден в базе`);
-            }
-        }
-        
-        // Отправляем ответ клиенту
-        res.status(201).json(message);
+            });
 
-    } catch (error) {
-        console.error('❌ Ошибка отправки сообщения:', error);
-        res.status(500).json({ 
-            error: 'Internal server error',
-            code: 'INTERNAL_ERROR',
-            details: process.env.NODE_ENV === 'development' ? error.message : undefined
+            // Присоединение к чату
+            socket.on('joinChat', async (data) => {
+                try {
+                    const { chatId } = data;
+                    
+                    if (!socket.userData) {
+                        socket.emit('error', { message: 'Not authenticated' });
+                        return;
+                    }
+
+                    // Проверяем права доступа к чату
+                    const chat = await Chat.findById(chatId);
+                    if (!chat || !chat.participants.includes(String(socket.userData.id))) {
+                        socket.emit('error', { message: 'Access denied to chat' });
+                        return;
+                    }
+
+                    socket.join(chatId);
+                    
+                    // Добавляем в мапу комнат
+                    if (!this.chatRooms.has(chatId)) {
+                        this.chatRooms.set(chatId, new Set());
+                    }
+                    this.chatRooms.get(chatId).add(socket.id);
+                    
+                    socket.emit('joinedChat', { chatId });
+                    console.log(`📨 Socket ${socket.id} joined chat ${chatId}`);
+                } catch (error) {
+                    console.error('❌ Join chat error:', error);
+                    socket.emit('error', { message: 'Failed to join chat' });
+                }
+            });
+
+            // Покидание чата
+            socket.on('leaveChat', (data) => {
+                const { chatId } = data;
+                socket.leave(chatId);
+                
+                if (this.chatRooms.has(chatId)) {
+                    this.chatRooms.get(chatId).delete(socket.id);
+                    if (this.chatRooms.get(chatId).size === 0) {
+                        this.chatRooms.delete(chatId);
+                    }
+                }
+                
+                socket.emit('leftChat', { chatId });
+                console.log(`📤 Socket ${socket.id} left chat ${chatId}`);
+            });
+
+            // ‼️ ИСПРАВЛЕНО: ОБРАБОТЧИК 'sendMessage' УДАЛЁН ‼️
+            // Логика отправки, сохранения и рассылки сообщения теперь полностью
+            // находится в HTTP-роуте /api/messages/send. Это устраняет дублирование.
+
+            // Отправка статуса прочтения
+            socket.on('sendReadReceipt', async (data) => {
+                try {
+                    const { messageId, chatId } = data;
+                    
+                    if (!socket.userData) {
+                        return;
+                    }
+
+                    // Проверяем доступ к чату
+                    const chat = await Chat.findById(chatId);
+                    if (!chat || !chat.participants.includes(String(socket.userData.id))) {
+                        return;
+                    }
+
+                    // Обновляем статус прочтения
+                    const message = await Message.findById(messageId);
+                    if (message) {
+                        message.markAsRead(socket.userData.id);
+                        await message.save();
+
+                        // Уведомляем других участников
+                        socket.to(chatId).emit('messageRead', {
+                            messageId: messageId,
+                            userId: socket.userData.id,
+                            readAt: new Date()
+                        });
+
+                        console.log(`📖 Message ${messageId} marked as read by ${socket.userData.nickname}`);
+                    }
+
+                } catch (error) {
+                    console.error('❌ Read receipt error:', error);
+                }
+            });
+
+            // Уведомление о наборе текста
+            socket.on('typing', (data) => {
+                const { chatId, isTyping } = data;
+                
+                if (!socket.userData) return;
+
+                socket.to(chatId).emit('userTyping', {
+                    userId: socket.userData.id,
+                    nickname: socket.userData.nickname,
+                    isTyping: isTyping
+                });
+            });
+
+            // Обработка отключения
+            socket.on('disconnect', async () => {
+                console.log('🔌 Client disconnected:', socket.id);
+                
+                const userData = this.userSockets.get(socket.id);
+                if (userData) {
+                    // Обновляем статус пользователя
+                    await User.findByIdAndUpdate(userData.id, {
+                        isOnline: false,
+                        lastSeen: new Date()
+                    });
+
+                    // Удаляем из мапов
+                    this.connectedUsers.delete(userData.id);
+                    this.userSockets.delete(socket.id);
+
+                    // Удаляем из чат-комнат
+                    for (const [chatId, sockets] of this.chatRooms.entries()) {
+                        sockets.delete(socket.id);
+                        if (sockets.size === 0) {
+                            this.chatRooms.delete(chatId);
+                        }
+                    }
+
+                    // Уведомляем о смене статуса
+                    this.broadcastUserStatus(userData.id, false);
+
+                    console.log(`👋 User ${userData.nickname} disconnected`);
+                }
+            });
         });
-    }
-});
 
-// Получение сообщений чата (ЗАЩИЩЕНО)
-router.get('/:chatId', authenticateToken, async (req, res) => {
-    try {
-        const { chatId } = req.params;
-        const limit = parseInt(req.query.limit) || 50;
-        const offset = parseInt(req.query.offset) || 0;
-        
-        console.log(`📥 Получение сообщений для чата ${chatId}`);
-        
-        // Проверяем существование чата
-        const chat = await Chat.findById(chatId);
-        if (!chat) {
-            return res.status(404).json({ 
-                error: 'Chat not found',
-                code: 'CHAT_NOT_FOUND'
-            });
-        }
-        
-        // Проверяем права доступа
-        const userIdStr = String(req.user.id);
-        const participantStrs = chat.participants.map(p => String(p));
-        
-        if (!participantStrs.includes(userIdStr)) {
-            return res.status(403).json({ 
-                error: 'Access denied. You are not a participant of this chat',
-                code: 'ACCESS_DENIED'
-            });
-        }
-        
-        // Получаем сообщения с данными отправителя
-        const messages = await Message.find({ chatId })
-            .populate('senderId', 'nickname firstName lastName avatar publicKey tronAddress')
-            .sort({ createdAt: -1 })
-            .limit(limit)
-            .skip(offset);
-        
-        console.log(`✅ Найдено ${messages.length} сообщений`);
-        
-        // Возвращаем в хронологическом порядке
-        res.json(messages.reverse());
-        
-    } catch (error) {
-        console.error('❌ Ошибка получения сообщений:', error);
-        res.status(500).json({ 
-            error: 'Internal server error',
-            code: 'INTERNAL_ERROR'
-        });
+        console.log('🚀 WebSocket service initialized');
     }
-});
 
-// Обновление статуса сообщения (ЗАЩИЩЕНО)
-router.put('/:messageId/status', authenticateToken, async (req, res) => {
-    try {
-        const { messageId } = req.params;
-        const { transactionStatus } = req.body;
-        
-        console.log(`📝 Обновление статуса сообщения ${messageId}`);
-        
-        const message = await Message.findById(messageId);
-        if (!message) {
-            return res.status(404).json({ 
-                error: 'Message not found',
-                code: 'MESSAGE_NOT_FOUND'
-            });
-        }
-        
-        // Проверяем что это сообщение отправителя
-        if (String(message.senderId) !== String(req.user.id)) {
-            return res.status(403).json({ 
-                error: 'Access denied. You can only update your own messages',
-                code: 'ACCESS_DENIED'
-            });
-        }
-        
-        // Обновляем статус транзакции
-        if (transactionStatus) {
-            message.transactionStatus = transactionStatus;
-            await message.save();
+    // Уведомление о статусе пользователя
+    async broadcastUserStatus(userId, isOnline) {
+        try {
+            const chats = await Chat.find({ participants: userId });
             
-            console.log(`✅ Статус транзакции обновлен на: ${transactionStatus}`);
-        }
-        
-        res.json({ 
-            message: 'Message status updated successfully',
-            messageId: messageId,
-            transactionStatus: transactionStatus
-        });
-        
-    } catch (error) {
-        console.error('❌ Ошибка обновления статуса сообщения:', error);
-        res.status(500).json({ 
-            error: 'Internal server error',
-            code: 'INTERNAL_ERROR'
-        });
-    }
-});
-
-// Пометка сообщений как прочитанных (ЗАЩИЩЕНО)
-router.post('/:chatId/mark-read', authenticateToken, async (req, res) => {
-    try {
-        const { chatId } = req.params;
-        const { messageIds } = req.body;
-        
-        console.log(`📖 Пометка сообщений как прочитанных в чате ${chatId}`);
-        
-        // Проверяем существование чата
-        const chat = await Chat.findById(chatId);
-        if (!chat) {
-            return res.status(404).json({ 
-                error: 'Chat not found',
-                code: 'CHAT_NOT_FOUND'
-            });
-        }
-        
-        // Проверяем права доступа
-        if (!chat.participants.map(p => String(p)).includes(String(req.user.id))) {
-            return res.status(403).json({ 
-                error: 'Access denied',
-                code: 'ACCESS_DENIED'
-            });
-        }
-        
-        let markedCount = 0;
-        
-        if (messageIds && Array.isArray(messageIds)) {
-            // Помечаем конкретные сообщения
-            for (const messageId of messageIds) {
-                const message = await Message.findById(messageId);
-                if (message && String(message.chatId) === chatId && !message.isReadBy(req.user.id)) {
-                    message.markAsRead(req.user.id);
-                    await message.save();
-                    markedCount++;
-                    console.log(`   ✅ Сообщение ${messageId} помечено как прочитанное`);
-                }
+            for (const chat of chats) {
+                this.io.to(chat._id.toString()).emit('userStatus', {
+                    userId,
+                    isOnline,
+                    timestamp: new Date()
+                });
             }
-        } else {
-            // Помечаем все непрочитанные сообщения
-            const unreadMessages = await Message.find({
+        } catch (error) {
+            console.error('❌ Broadcast user status error:', error);
+        }
+    }
+
+    // Отправка системного сообщения в чат
+    async sendSystemMessage(chatId, content) {
+        try {
+            const systemMessage = new Message({
                 chatId: chatId,
-                senderId: { $ne: req.user.id },
-                'readReceipts.userId': { $ne: req.user.id }
+                senderId: 'system',
+                content: content,
+                messageType: 'system',
+                deliveryStatus: 'delivered'
             });
-            
-            console.log(`   📊 Найдено ${unreadMessages.length} непрочитанных сообщений`);
-            
-            for (const message of unreadMessages) {
-                message.markAsRead(req.user.id);
-                await message.save();
-                markedCount++;
-            }
-        }
-        
-        console.log(`✅ Помечено как прочитанное: ${markedCount} сообщений`);
-        
-        res.json({ 
-            message: `Marked ${markedCount} messages as read`,
-            markedCount: markedCount,
-            chatId: chatId
-        });
-        
-    } catch (error) {
-        console.error('❌ Ошибка пометки сообщений как прочитанных:', error);
-        res.status(500).json({ 
-            error: 'Internal server error',
-            code: 'INTERNAL_ERROR'
-        });
-    }
-});
 
-// Удаление сообщения (ЗАЩИЩЕНО)
-router.delete('/:messageId', authenticateToken, async (req, res) => {
-    try {
-        const { messageId } = req.params;
-        
-        console.log(`🗑️ Удаление сообщения ${messageId}`);
-        
-        const message = await Message.findById(messageId);
-        if (!message) {
-            return res.status(404).json({ 
-                error: 'Message not found',
-                code: 'MESSAGE_NOT_FOUND'
-            });
-        }
-        
-        // Проверяем что это сообщение отправителя
-        if (String(message.senderId) !== String(req.user.id)) {
-            return res.status(403).json({ 
-                error: 'Access denied. You can only delete your own messages',
-                code: 'ACCESS_DENIED'
-            });
-        }
-        
-        await message.deleteOne();
-        
-        console.log(`✅ Сообщение удалено`);
-        
-        res.json({ 
-            message: 'Message deleted successfully',
-            messageId: messageId
-        });
-        
-    } catch (error) {
-        console.error('❌ Ошибка удаления сообщения:', error);
-        res.status(500).json({ 
-            error: 'Internal server error',
-            code: 'INTERNAL_ERROR'
-        });
-    }
-});
+            await systemMessage.save();
 
-module.exports = router;
+            this.io.to(chatId).emit('message', {
+                id: systemMessage._id,
+                chatId: systemMessage.chatId,
+                senderId: 'system',
+                content: systemMessage.content,
+                messageType: 'system',
+                timestamp: systemMessage.createdAt,
+                isEncrypted: false
+            });
+
+            console.log(`📢 System message sent to chat ${chatId}: ${content}`);
+
+        } catch (error) {
+            console.error('❌ Send system message error:', error);
+        }
+    }
+
+    // Получение статистики подключений
+    getConnectionStats() {
+        return {
+            connectedUsers: this.connectedUsers.size,
+            activeChats: this.chatRooms.size,
+            totalSockets: this.userSockets.size
+        };
+    }
+}
+
+module.exports = WebSocketService;
