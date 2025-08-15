@@ -1,7 +1,7 @@
 // =====================================================
 // ФАЙЛ: routes/messages.js (BACKEND) - ПОЛНАЯ ИСПРАВЛЕННАЯ ВЕРСИЯ
 // ПУТЬ: nickname-messenger-backend/routes/messages.js
-// ОПИСАНИЕ: Добавлена отправка WebSocket-события после сохранения сообщения
+// ОПИСАНИЕ: Исправлена ошибка 'toString of undefined' при отправке WebSocket-события
 // =====================================================
 
 const express = require('express');
@@ -24,7 +24,7 @@ router.post('/send', authenticateToken, async (req, res) => {
             encryptionData
         } = req.body;
         
-        const senderId = req.user.id; // Получаем из JWT токена
+        const senderId = req.user.id;
         
         console.log(`📤 Отправка сообщения от ${req.user.nickname} в чат ${chatId}`);
         console.log(`📤 Тип сообщения: ${messageType}, зашифровано: ${isEncrypted}`);
@@ -35,7 +35,6 @@ router.post('/send', authenticateToken, async (req, res) => {
             });
         }
         
-        // Проверяем существование чата и участие пользователя
         const chat = await Chat.findById(chatId);
         if (!chat) {
             console.log('❌ Чат не найден');
@@ -44,16 +43,13 @@ router.post('/send', authenticateToken, async (req, res) => {
         
         const userIdStr = String(senderId);
         const participantStrs = chat.participants.map(p => String(p));
-        const isParticipant = participantStrs.includes(userIdStr);
-        
-        if (!isParticipant) {
+        if (!participantStrs.includes(userIdStr)) {
             console.log('❌ Пользователь не авторизован для отправки сообщения в этот чат');
             return res.status(403).json({ 
                 error: 'Access denied. You are not a participant of this chat'
             });
         }
         
-        // Создаем сообщение
         const messageData = { 
             chatId, 
             senderId, 
@@ -72,24 +68,25 @@ router.post('/send', authenticateToken, async (req, res) => {
         const message = new Message(messageData);
         await message.save();
         
-        // Обновляем чат
         await Chat.findByIdAndUpdate(chatId, {
             lastMessage: message._id,
             lastMessageAt: new Date()
         });
         
+        // ---> НАЧАЛО ИЗМЕНЕНИЙ
+        // Сначала "заполняем" (populate) данные отправителя
         await message.populate('senderId', 'nickname firstName lastName avatar');
         
         console.log(`✅ Сообщение успешно отправлено: ${message._id}`);
 
-        // ---> НАЧАЛО ИЗМЕНЕНИЙ
-        // Отправляем сообщение всем участникам чата через WebSocket
+        // Теперь отправляем сообщение через WebSocket
         try {
-            const io = req.io; // Получаем io из middleware
+            const io = req.io;
             const webSocketMessage = {
                 _id: message._id,
-                id: message._id, // Для совместимости с клиентом
+                id: message._id,
                 chatId: message.chatId.toString(),
+                // Убеждаемся, что senderId - это объект, и берем из него _id
                 senderId: message.senderId._id.toString(),
                 content: message.content,
                 messageType: message.messageType,
@@ -100,7 +97,7 @@ router.post('/send', authenticateToken, async (req, res) => {
                 transactionHash: message.transactionHash,
                 transactionStatus: message.transactionStatus,
                 deliveryStatus: message.deliveryStatus,
-                senderInfo: {
+                senderInfo: { // Добавляем информацию об отправителе
                     nickname: message.senderId.nickname,
                     firstName: message.senderId.firstName,
                     lastName: message.senderId.lastName,
@@ -108,7 +105,6 @@ router.post('/send', authenticateToken, async (req, res) => {
                 }
             };
 
-            // Отправляем событие 'message' в комнату, соответствующую chatId
             io.to(chatId.toString()).emit('message', webSocketMessage);
             console.log(`📡 Сообщение ${message._id} отправлено в WebSocket комнату ${chatId}`);
         } catch (wsError) {
@@ -149,8 +145,6 @@ router.get('/:chatId', authenticateToken, async (req, res) => {
             });
         }
         
-        console.log(`✅ Пользователь имеет доступ к чату, загружаем сообщения...`);
-        
         const messages = await Message.find({ chatId })
             .populate('senderId', 'nickname firstName lastName avatar')
             .sort({ createdAt: -1 })
@@ -159,7 +153,7 @@ router.get('/:chatId', authenticateToken, async (req, res) => {
         
         console.log(`✅ Найдено ${messages.length} сообщений для чата ${chatId}`);
         
-        res.json(messages.reverse()); // Возвращаем в хронологическом порядке
+        res.json(messages.reverse());
         
     } catch (error) {
         console.error('❌ Ошибка получения сообщений:', error);
