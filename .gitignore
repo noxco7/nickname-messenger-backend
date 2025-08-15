@@ -29,3 +29,5 @@ dist/
 .fusebox/
 .dynamodb/
 .tern-port
+node_modules
+firebase-service-account-key.json

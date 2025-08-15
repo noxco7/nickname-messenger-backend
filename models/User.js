@@ -1,9 +1,14 @@
+// =====================================================
+// ФАЙЛ: models/User.js (BACKEND) - ОБНОВЛЕННАЯ ВЕРСЯ
+// ПУТЬ: nickname-messenger-backend/models/User.js
+// ОПИСАНИЕ: Добавлено поле deviceTokens для push-уведомлений
+// =====================================================
+
 const mongoose = require('mongoose');
 
 const UserSchema = new mongoose.Schema({
-    // ИСПРАВЛЕНО: Убираем уникальность и валидацию для совместимости с UUID
     _id: {
-        type: String, // Используем String вместо ObjectId для UUID
+        type: String,
         required: true
     },
     nickname: {
@@ -46,14 +51,19 @@ const UserSchema = new mongoose.Schema({
     lastSeen: {
         type: Date,
         default: Date.now
+    },
+    // ---> НАЧАЛО ИЗМЕНЕНИЙ
+    deviceTokens: {
+        type: [String],
+        default: []
     }
+    // <--- КОНЕЦ ИЗМЕНЕНИЙ
 }, {
-    _id: false, // ВАЖНО: отключаем автогенерацию _id
+    _id: false,
     timestamps: true,
     collection: 'users'
 });
 
-// Виртуальное поле для отображаемого имени
 UserSchema.virtual('displayName').get(function() {
     if (this.firstName && this.lastName) {
         return `${this.firstName} ${this.lastName}`;
@@ -61,16 +71,13 @@ UserSchema.virtual('displayName').get(function() {
     return this.nickname;
 });
 
-// ДОБАВЛЕНО: Виртуальное поле id для совместимости с клиентом
 UserSchema.virtual('id').get(function() {
     return this._id;
 });
 
-// Включаем виртуальные поля в JSON
 UserSchema.set('toJSON', { virtuals: true });
 UserSchema.set('toObject', { virtuals: true });
 
-// Индексы для быстрого поиска
 UserSchema.index({ nickname: 1 });
 UserSchema.index({ tronAddress: 1 });
 UserSchema.index({ publicKey: 1 });
