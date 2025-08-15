@@ -1,8 +1,7 @@
 // =====================================================
-// ФАЙЛ: routes/messages.js (BACKEND) - FIXED WITH DEBUGGING
+// ФАЙЛ: routes/messages.js (BACKEND) - ПОЛНАЯ ИСПРАВЛЕННАЯ ВЕРСИЯ
 // ПУТЬ: nickname-messenger-backend/routes/messages.js
-// ТИП: Node.js Backend
-// ОПИСАНИЕ: Исправленные сообщения роуты с отладкой
+// ОПИСАНИЕ: Добавлена отправка WebSocket-события после сохранения сообщения
 // =====================================================
 
 const express = require('express');
@@ -21,7 +20,6 @@ router.post('/send', authenticateToken, async (req, res) => {
             cryptoAmount,
             transactionHash,
             transactionStatus,
-            // НОВОЕ: E2E шифрование
             isEncrypted = false,
             encryptionData
         } = req.body;
@@ -37,39 +35,21 @@ router.post('/send', authenticateToken, async (req, res) => {
             });
         }
         
-        // ИСПРАВЛЕНО: Проверяем существование чата и участие пользователя с отладкой
+        // Проверяем существование чата и участие пользователя
         const chat = await Chat.findById(chatId);
         if (!chat) {
             console.log('❌ Чат не найден');
             return res.status(404).json({ error: 'Chat not found' });
         }
         
-        // ОТЛАДКА: Выводим подробную информацию
-        console.log(`🔍 ДЕБАГ УЧАСТНИКОВ ЧАТА:`);
-        console.log(`   - Chat ID: ${chatId}`);
-        console.log(`   - User ID: ${senderId}`);
-        console.log(`   - User ID type: ${typeof senderId}`);
-        console.log(`   - Chat participants:`, chat.participants);
-        console.log(`   - Chat participants types:`, chat.participants.map(p => typeof p));
-        
-        // ИСПРАВЛЕНО: Приводим все к строкам для корректного сравнения
         const userIdStr = String(senderId);
         const participantStrs = chat.participants.map(p => String(p));
         const isParticipant = participantStrs.includes(userIdStr);
         
-        console.log(`   - User ID as string: "${userIdStr}"`);
-        console.log(`   - Participants as strings:`, participantStrs);
-        console.log(`   - Is participant: ${isParticipant}`);
-        
         if (!isParticipant) {
             console.log('❌ Пользователь не авторизован для отправки сообщения в этот чат');
             return res.status(403).json({ 
-                error: 'Access denied. You are not a participant of this chat',
-                debug: {
-                    userId: userIdStr,
-                    participants: participantStrs,
-                    chatId: chatId
-                }
+                error: 'Access denied. You are not a participant of this chat'
             });
         }
         
@@ -98,9 +78,43 @@ router.post('/send', authenticateToken, async (req, res) => {
             lastMessageAt: new Date()
         });
         
-        await message.populate('senderId', 'nickname firstName lastName');
+        await message.populate('senderId', 'nickname firstName lastName avatar');
         
         console.log(`✅ Сообщение успешно отправлено: ${message._id}`);
+
+        // ---> НАЧАЛО ИЗМЕНЕНИЙ
+        // Отправляем сообщение всем участникам чата через WebSocket
+        try {
+            const io = req.io; // Получаем io из middleware
+            const webSocketMessage = {
+                _id: message._id,
+                id: message._id, // Для совместимости с клиентом
+                chatId: message.chatId.toString(),
+                senderId: message.senderId._id.toString(),
+                content: message.content,
+                messageType: message.messageType,
+                timestamp: message.createdAt,
+                isEncrypted: message.isEncrypted,
+                encryptionData: message.encryptionData,
+                cryptoAmount: message.cryptoAmount,
+                transactionHash: message.transactionHash,
+                transactionStatus: message.transactionStatus,
+                deliveryStatus: message.deliveryStatus,
+                senderInfo: {
+                    nickname: message.senderId.nickname,
+                    firstName: message.senderId.firstName,
+                    lastName: message.senderId.lastName,
+                    avatar: message.senderId.avatar
+                }
+            };
+
+            // Отправляем событие 'message' в комнату, соответствующую chatId
+            io.to(chatId.toString()).emit('message', webSocketMessage);
+            console.log(`📡 Сообщение ${message._id} отправлено в WebSocket комнату ${chatId}`);
+        } catch (wsError) {
+            console.error('❌ Ошибка отправки сообщения через WebSocket:', wsError);
+        }
+        // <--- КОНЕЦ ИЗМЕНЕНИЙ
         
         res.status(201).json(message);
         
@@ -110,7 +124,7 @@ router.post('/send', authenticateToken, async (req, res) => {
     }
 });
 
-// Получение сообщений чата (ЗАЩИЩЕНО) - ИСПРАВЛЕНО
+// Получение сообщений чата (ЗАЩИЩЕНО)
 router.get('/:chatId', authenticateToken, async (req, res) => {
     try {
         const { chatId } = req.params;
@@ -118,41 +132,20 @@ router.get('/:chatId', authenticateToken, async (req, res) => {
         const offset = parseInt(req.query.offset) || 0;
         
         console.log(`📥 Получаем сообщения для чата ${chatId} пользователем: ${req.user.nickname}`);
-        console.log(`📥 ID пользователя: ${req.user.id} (тип: ${typeof req.user.id})`);
         
-        // ИСПРАВЛЕНО: Проверяем доступ к чату с отладкой
         const chat = await Chat.findById(chatId);
         if (!chat) {
             console.log('❌ Чат не найден');
             return res.status(404).json({ error: 'Chat not found' });
         }
         
-        // ОТЛАДКА: Выводим подробную информацию о проверке доступа
-        console.log(`🔍 ДЕБАГ ПРОВЕРКИ ДОСТУПА К ЧАТУ:`);
-        console.log(`   - Chat ID: ${chatId}`);
-        console.log(`   - User ID: ${req.user.id}`);
-        console.log(`   - User ID type: ${typeof req.user.id}`);
-        console.log(`   - Chat participants:`, chat.participants);
-        console.log(`   - Chat participants types:`, chat.participants.map(p => typeof p));
-        
-        // ИСПРАВЛЕНО: Приводим все к строкам для корректного сравнения
         const userIdStr = String(req.user.id);
         const participantStrs = chat.participants.map(p => String(p));
-        const hasAccess = participantStrs.includes(userIdStr);
         
-        console.log(`   - User ID as string: "${userIdStr}"`);
-        console.log(`   - Participants as strings:`, participantStrs);
-        console.log(`   - Has access: ${hasAccess}`);
-        
-        if (!hasAccess) {
+        if (!participantStrs.includes(userIdStr)) {
             console.log('❌ Пользователь не авторизован для просмотра сообщений в этом чате');
             return res.status(403).json({ 
-                error: 'Access denied. You are not a participant of this chat',
-                debug: {
-                    userId: userIdStr,
-                    participants: participantStrs,
-                    chatId: chatId
-                }
+                error: 'Access denied. You are not a participant of this chat'
             });
         }
         
@@ -188,14 +181,11 @@ router.put('/:messageId/status', authenticateToken, async (req, res) => {
             return res.status(404).json({ error: 'Message not found' });
         }
         
-        // ИСПРАВЛЕНО: Приводим к строкам для сравнения
         const userIdStr = String(req.user.id);
         const senderIdStr = String(message.senderId);
         
         if (senderIdStr !== userIdStr) {
             console.log('❌ Пользователь не авторизован для обновления этого сообщения');
-            console.log(`   - User ID: "${userIdStr}"`);
-            console.log(`   - Sender ID: "${senderIdStr}"`);
             return res.status(403).json({ error: 'Access denied. You can only update your own messages' });
         }
         
@@ -223,36 +213,29 @@ router.put('/:messageId/status', authenticateToken, async (req, res) => {
 router.post('/:chatId/mark-read', authenticateToken, async (req, res) => {
     try {
         const { chatId } = req.params;
-        const { messageIds } = req.body; // Массив ID сообщений для пометки
+        const { messageIds } = req.body;
         
         console.log(`📖 Пометка сообщений как прочитанных в чате ${chatId} пользователем: ${req.user.nickname}`);
         
-        // Проверяем доступ к чату
         const chat = await Chat.findById(chatId);
         if (!chat) {
             console.log('❌ Чат не найден');
             return res.status(404).json({ error: 'Chat not found' });
         }
         
-        // ИСПРАВЛЕНО: Приводим к строкам для сравнения
         const userIdStr = String(req.user.id);
         const participantStrs = chat.participants.map(p => String(p));
         
         if (!participantStrs.includes(userIdStr)) {
             console.log('❌ Пользователь не авторизован для пометки сообщений в этом чате');
             return res.status(403).json({ 
-                error: 'Access denied. You are not a participant of this chat',
-                debug: {
-                    userId: userIdStr,
-                    participants: participantStrs
-                }
+                error: 'Access denied. You are not a participant of this chat'
             });
         }
         
         let markedCount = 0;
         
         if (messageIds && Array.isArray(messageIds)) {
-            // Помечаем конкретные сообщения
             for (const messageId of messageIds) {
                 const message = await Message.findById(messageId);
                 if (message && String(message.chatId) === chatId) {
@@ -264,10 +247,9 @@ router.post('/:chatId/mark-read', authenticateToken, async (req, res) => {
                 }
             }
         } else {
-            // Помечаем все непрочитанные сообщения в чате
             const unreadMessages = await Message.find({
                 chatId: chatId,
-                senderId: { $ne: req.user.id }, // Не помечаем свои сообщения
+                senderId: { $ne: req.user.id },
                 'readReceipts.userId': { $ne: req.user.id }
             });
             
