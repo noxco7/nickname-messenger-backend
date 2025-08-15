@@ -6,6 +6,7 @@
 
 const admin = require('firebase-admin');
 const path = require('path');
+const User = require('../models/User'); // <--- Добавил импорт модели User
 
 // Путь к вашему секретному ключу
 const serviceAccountPath = path.join(__dirname, '..', 'firebase-service-account-key.json');
@@ -16,7 +17,7 @@ try {
     });
     console.log('🔥 Firebase Admin SDK инициализирован успешно.');
 } catch (error) {
-    // Проверяем, не была ли уже инициализирована
+    // Проверяем, не была ли уже инициализирована (полезно для hot-reload)
     if (error.code !== 'app/duplicate-app') {
         console.error('❌ Ошибка инициализации Firebase Admin SDK:', error.message);
         console.error('❗ Убедитесь, что файл "firebase-service-account-key.json" находится в корневой папке проекта.');
@@ -30,10 +31,14 @@ const sendPushNotification = async (deviceTokens, title, body, dataPayload = {})
         return;
     }
     
-    // Удаляем дубликаты токенов
-    const uniqueTokens = [...new Set(deviceTokens)];
+    // Удаляем дубликаты и пустые токены
+    const uniqueTokens = [...new Set(deviceTokens)].filter(token => token);
 
-    // Cообщение теперь является объектом MulticastMessage
+    if (uniqueTokens.length === 0) {
+        console.log('🤔 Нет валидных токенов для отправки push-уведомления.');
+        return;
+    }
+
     const message = {
         notification: {
             title: title,
@@ -55,8 +60,6 @@ const sendPushNotification = async (deviceTokens, title, body, dataPayload = {})
     try {
         console.log(`🚀 Отправка push-уведомления на ${uniqueTokens.length} устройств...`);
         
-        // ---> ИСПРАВЛЕНИЕ ЗДЕСЬ <---
-        // Заменяем sendMulticast на send
         const response = await admin.messaging().sendEachForMulticast(message);
         
         if (response.successCount > 0) {
@@ -64,7 +67,19 @@ const sendPushNotification = async (deviceTokens, title, body, dataPayload = {})
         }
         if (response.failureCount > 0) {
             console.log(`❌ Не удалось отправить ${response.failureCount} push-уведомлений.`);
-            // Здесь можно добавить логику для удаления недействительных токенов из БД
+            
+            const failedTokens = response.responses
+                .filter(res => !res.success && res.error && res.error.code === 'messaging/invalid-argument')
+                .map(res => res.token);
+            
+            if (failedTokens.length > 0) {
+                console.log(`🗑️ Удаление недействительных токенов: ${failedTokens.join(', ')}`);
+                await User.updateMany(
+                    { deviceTokens: { $in: failedTokens } },
+                    { $pullAll: { deviceTokens: failedTokens } }
+                );
+                console.log('✅ Недействительные токены удалены из базы данных.');
+            }
         }
     } catch (error) {
         console.error('❌ Ошибка при отправке push-уведомления:', error);

@@ -133,7 +133,7 @@ MessageSchema.pre('save', function(next) {
 
 // Метод для добавления отметки о прочтении
 MessageSchema.methods.markAsRead = function(userId) {
-    const existingReceipt = this.readReceipts.find(receipt => receipt.userId === userId);
+    const existingReceipt = this.readReceipts.find(receipt => String(receipt.userId) === String(userId));
     
     if (!existingReceipt) {
         this.readReceipts.push({
@@ -141,7 +141,7 @@ MessageSchema.methods.markAsRead = function(userId) {
             readAt: new Date()
         });
         
-        if (this.senderId === userId) {
+        if (String(this.senderId) === String(userId)) {
             this.deliveryStatus = 'read';
         }
     }
@@ -151,7 +151,7 @@ MessageSchema.methods.markAsRead = function(userId) {
 
 // Метод для проверки, прочитано ли сообщение пользователем
 MessageSchema.methods.isReadBy = function(userId) {
-    return this.readReceipts.some(receipt => receipt.userId === userId);
+    return this.readReceipts.some(receipt => String(receipt.userId) === String(userId));
 };
 
 // Виртуальное поле для отображаемого контента
