@@ -1,5 +1,5 @@
 // =====================================================
-// ФАЙЛ: services/pushNotificationService.js (BACKEND) - НОВЫЙ ФАЙЛ
+// ФАЙЛ: services/pushNotificationService.js (BACKEND) - ИСПРАВЛЕННАЯ ВЕРСИЯ
 // ПУТЬ: nickname-messenger-backend/services/pushNotificationService.js
 // ОПИСАНИЕ: Сервис для инициализации Firebase и отправки уведомлений
 // =====================================================
@@ -16,8 +16,11 @@ try {
     });
     console.log('🔥 Firebase Admin SDK инициализирован успешно.');
 } catch (error) {
-    console.error('❌ Ошибка инициализации Firebase Admin SDK:', error.message);
-    console.error('❗ Убедитесь, что файл "firebase-service-account-key.json" находится в корневой папке проекта.');
+    // Проверяем, не была ли уже инициализирована
+    if (error.code !== 'app/duplicate-app') {
+        console.error('❌ Ошибка инициализации Firebase Admin SDK:', error.message);
+        console.error('❗ Убедитесь, что файл "firebase-service-account-key.json" находится в корневой папке проекта.');
+    }
 }
 
 
@@ -30,6 +33,7 @@ const sendPushNotification = async (deviceTokens, title, body, dataPayload = {})
     // Удаляем дубликаты токенов
     const uniqueTokens = [...new Set(deviceTokens)];
 
+    // Cообщение теперь является объектом MulticastMessage
     const message = {
         notification: {
             title: title,
@@ -50,7 +54,10 @@ const sendPushNotification = async (deviceTokens, title, body, dataPayload = {})
 
     try {
         console.log(`🚀 Отправка push-уведомления на ${uniqueTokens.length} устройств...`);
-        const response = await admin.messaging().sendMulticast(message);
+        
+        // ---> ИСПРАВЛЕНИЕ ЗДЕСЬ <---
+        // Заменяем sendMulticast на send
+        const response = await admin.messaging().sendEachForMulticast(message);
         
         if (response.successCount > 0) {
             console.log(`✅ Успешно отправлено ${response.successCount} push-уведомлений.`);
