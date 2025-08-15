@@ -215,12 +215,18 @@ router.get('/my/with-messages', authenticateToken, async (req, res) => {
         console.log('💬 Получаем чаты с полной информацией о сообщениях для пользователя:', req.user.nickname);
         console.log('   - Normalized user ID:', normalizedCurrentUserId);
         
-        // ЗДЕСЬ популяризируем lastMessage для полной информации
+        // --- ИСПРАВЛЕНИЕ: Популяризируем `lastMessage` и `senderId` внутри него
         const chats = await Chat.find({ 
             participants: normalizedCurrentUserId,
             isActive: true 
         })
-        .populate('lastMessage')
+        .populate({
+            path: 'lastMessage',
+            populate: {
+                path: 'senderId',
+                select: 'nickname firstName lastName avatar publicKey tronAddress'
+            }
+        })
         .sort({ lastMessageAt: -1 })
         .limit(limit)
         .skip(offset);
