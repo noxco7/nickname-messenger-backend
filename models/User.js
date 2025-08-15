@@ -1,7 +1,7 @@
 // =====================================================
-// ФАЙЛ: models/User.js (BACKEND) - ОБНОВЛЕННАЯ ВЕРСЯ
+// ФАЙЛ: models/User.js (BACKEND) - ФИНАЛЬНАЯ ВЕРСИЯ
 // ПУТЬ: nickname-messenger-backend/models/User.js
-// ОПИСАНИЕ: Добавлено поле deviceTokens для push-уведомлений
+// ОПИСАНИЕ: Добавлено значение по умолчанию для deviceTokens
 // =====================================================
 
 const mongoose = require('mongoose');
@@ -52,12 +52,12 @@ const UserSchema = new mongoose.Schema({
         type: Date,
         default: Date.now
     },
-    // ---> НАЧАЛО ИЗМЕНЕНИЙ
     deviceTokens: {
         type: [String],
-        default: []
+        // ---> ИЗМЕНЕНИЕ: Гарантируем, что это поле всегда будет массивом
+        default: [] 
+        // <--- КОНЕЦ ИЗМЕНЕНИЙ
     }
-    // <--- КОНЕЦ ИЗМЕНЕНИЙ
 }, {
     _id: false,
     timestamps: true,
