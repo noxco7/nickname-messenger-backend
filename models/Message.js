@@ -66,6 +66,7 @@ const MessageSchema = new mongoose.Schema({
     },
     senderId: {
         type: String, // UUID
+        ref: 'User',  // <--- ДОБАВЬТЕ ЭТУ СТРОКУ
         required: true
     },
     content: {
