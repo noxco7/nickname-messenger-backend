@@ -72,8 +72,8 @@ router.post('/send', authenticateToken, async (req, res) => {
             lastMessageAt: new Date()
         });
         
-        // ---> ИСПРАВЛЕНИЕ: Добавлен publicKey для заполнения
-        await message.populate('senderId', 'nickname firstName lastName avatar publicKey');
+        // ---> ИСПРАВЛЕНИЕ: Добавлены publicKey и tronAddress для заполнения
+        await message.populate('senderId', 'nickname firstName lastName avatar publicKey tronAddress');
         
         console.log(`✅ Сообщение ${message._id} сохранено в базу данных.`);
 
@@ -136,9 +136,9 @@ router.get('/:chatId', authenticateToken, async (req, res) => {
             });
         }
         
-        // ---> ИСПРАВЛЕНИЕ: Добавлен publicKey для заполнения
+        // ---> ИСПРАВЛЕНИЕ: Добавлены publicKey и tronAddress для заполнения
         const messages = await Message.find({ chatId })
-            .populate('senderId', 'nickname firstName lastName avatar publicKey')
+            .populate('senderId', 'nickname firstName lastName avatar publicKey tronAddress')
             .sort({ createdAt: -1 })
             .limit(limit)
             .skip(offset);
